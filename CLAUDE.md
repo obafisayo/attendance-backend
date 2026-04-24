@@ -1,6 +1,12 @@
 # CLAUDE.md — Attendance Backend
 
-This file is the single source of truth for Claude sessions working on this repo. Read it before doing anything else.
+## How to use this file
+
+**For Claude:** Read this entire file before touching any code. It tells you exactly what is done, what is not, and which files are frozen. Do not explore the codebase to re-derive what is already documented here — that wastes tokens. Most importantly: **never re-implement something listed under "What is already done".** When a task is marked complete below, treat every file it touched as finished and reviewed. Do not rewrite, refactor, or second-guess merged work unless the user explicitly asks.
+
+**For team members:** This is your onboarding doc. Read it before writing a single line. It tells you which files belong to your task, which files to never touch, and the order PRs must be merged in. Two minutes here saves hours of merge conflicts.
+
+**Keeping this file current:** When a task is merged, update the status table in "The 5 backend tasks" section from `pending` to `done` and move its files into the "What is already done" section. This is what prevents Claude from re-implementing work that already exists in the codebase.
 
 ---
 
@@ -102,6 +108,19 @@ These files are shared infrastructure. Editing them risks breaking everyone:
 ## The 5 backend tasks
 
 Each task owns a router + service + test file. There is zero file overlap between tasks 1–4 by design.
+
+**Status key:** `pending` = not started | `in progress` = branch open | `done` = merged into master — do not re-implement
+
+| Task | Branch | Status |
+|---|---|---|
+| 1. Auth | `feat/auth` | `pending` |
+| 2. Sessions | `feat/sessions` | `pending` |
+| 3. Attendance | `feat/attendance` | `pending` |
+| 4. Courses | `feat/courses` | `pending` |
+| 5. ML/Face | `feat/ml` | `pending` |
+
+> **Claude instruction:** If a task above shows `done`, its files are complete. Do not reopen, rewrite, or re-examine them unless the user explicitly says something is broken. Read the file to understand what was built, not to improve it.
+
 
 ### Task 1 — `feat/auth` (DO THIS FIRST)
 
