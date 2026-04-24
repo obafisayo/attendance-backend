@@ -16,9 +16,6 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.execute("CREATE TYPE user_role AS ENUM ('student', 'professor')")
-    op.execute("CREATE TYPE session_status AS ENUM ('active', 'ended')")
-
     op.create_table(
         "users",
         sa.Column("id", UUID(as_uuid=True), primary_key=True),
@@ -27,7 +24,7 @@ def upgrade() -> None:
         sa.Column("password_hash", sa.String(), nullable=False),
         sa.Column(
             "role",
-            sa.Enum("student", "professor", name="user_role", create_type=False),
+            sa.Enum("student", "professor", name="user_role"),
             nullable=False,
         ),
         sa.Column("full_name", sa.String(), nullable=True),
@@ -69,7 +66,7 @@ def upgrade() -> None:
         sa.Column("professor_id", UUID(as_uuid=True), sa.ForeignKey("users.id"), nullable=False),
         sa.Column(
             "status",
-            sa.Enum("active", "ended", name="session_status", create_type=False),
+            sa.Enum("active", "ended", name="session_status"),
             nullable=False,
             server_default="active",
         ),
@@ -120,5 +117,5 @@ def downgrade() -> None:
     op.drop_table("enrollments")
     op.drop_table("courses")
     op.drop_table("users")
-    op.execute("DROP TYPE session_status")
-    op.execute("DROP TYPE user_role")
+    sa.Enum(name="session_status").drop(op.get_bind(), checkfirst=True)
+    sa.Enum(name="user_role").drop(op.get_bind(), checkfirst=True)
