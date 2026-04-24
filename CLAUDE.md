@@ -82,11 +82,15 @@ tests/
 - All SQLAlchemy models with relationships, FK constraints, and the `UniqueConstraint("session_id", "student_id")` on attendance
 - `core/security.py` — full JWT and BLE signature logic
 - `core/dependencies.py` — all three auth dependency functions
-- `build_token_pair()` in `services/auth.py`
-- Freshness check (Step 1) in `services/attendance.py`
 - All Pydantic schemas
 - Alembic migration `0001_initial_schema.py`
 - `docker-compose.yml` (postgres + api), `Dockerfile`, `README.md`
+- `tests/conftest.py` — test DB setup, `clean_tables` fixture (truncates all tables between tests), `client` fixture (HTTPX AsyncClient with DB override)
+
+**Task 1 — Auth (merged PR #1):**
+- `app/services/auth.py` — `create_user()` (duplicate email/matric 409, student matric validation 422, bcrypt hash), `authenticate_user()` (fetch by email+role, verify password), `build_token_pair()`
+- `app/routers/auth.py` — `POST /auth/register`, `POST /auth/login`, `POST /auth/logout` (no-op), `POST /auth/refresh` (decode → assert type=="refresh" → re-fetch user → new pair)
+- `tests/test_auth.py` — 9 passing tests covering register, duplicate, login, wrong password/role, refresh valid/invalid
 
 ---
 
@@ -113,7 +117,7 @@ Each task owns a router + service + test file. There is zero file overlap betwee
 
 | Task | Branch | Status |
 |---|---|---|
-| 1. Auth | `feat/auth` | `pending` |
+| 1. Auth | `feat/auth` | `done` |
 | 2. Sessions | `feat/sessions` | `pending` |
 | 3. Attendance | `feat/attendance` | `pending` |
 | 4. Courses | `feat/courses` | `pending` |
