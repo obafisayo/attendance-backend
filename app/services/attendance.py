@@ -1,11 +1,13 @@
+import uuid
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.models.attendance import Attendance
 from app.models.session import Session, SessionToken
+from app.models.user import User
 from app.core.security import verify_ble_signature
-from app.schemas.attendance import MarkAttendanceRequest, MarkAttendanceResponse
+from app.schemas.attendance import MarkAttendanceRequest, MarkAttendanceResponse, ProfessorAttendanceRecord
 
 TOKEN_FRESHNESS_MS = 30_000  # reject BLE tokens older than 30 seconds
 
@@ -47,7 +49,18 @@ async def get_student_history(
     raise NotImplementedError
 
 
-async def get_session_attendance(db: AsyncSession, session_id: str) -> list:
-    # TODO: query attendance JOIN users WHERE session_id = session_id
-    # TODO: return list of ProfessorAttendanceRecord
-    raise NotImplementedError
+async def get_session_attendance(db: AsyncSession, session_id: str) -> list[ProfessorAttendanceRecord]:
+    result = await db.execute(
+        select(Attendance, User)
+        .join(User, User.id == Attendance.student_id)
+        .where(Attendance.session_id == uuid.UUID(session_id))
+    )
+    return [
+        ProfessorAttendanceRecord(
+            student_id=att.student_id,
+            student_name=usr.full_name,
+            marked_at=att.marked_at,
+            token_id=att.token_id,
+        )
+        for att, usr in result.all()
+    ]
