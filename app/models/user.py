@@ -20,6 +20,7 @@ class User(Base):
     # TODO: add face_embedding column (LargeBinary or Vector) when ML is ready
     # face_embedding = Column(LargeBinary, nullable=True)
 
+    courses = relationship("Course", back_populates="professor")
     sessions = relationship("Session", back_populates="professor")
     enrollments = relationship("Enrollment", back_populates="student")
     attendance_records = relationship("Attendance", back_populates="student")

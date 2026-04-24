@@ -15,7 +15,7 @@ class Course(Base):
     professor_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    professor = relationship("User", back_populates="sessions")
+    professor = relationship("User", back_populates="courses")
     sessions = relationship("Session", back_populates="course")
     enrollments = relationship("Enrollment", back_populates="course")
 
