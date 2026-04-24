@@ -1,46 +1,50 @@
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException, status
+from jose import JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.security import decode_token
 from app.database import get_db
-from app.schemas.auth import AuthResponse, LoginRequest, RefreshRequest, RefreshResponse, RegisterRequest
+from app.models.user import User
+from app.schemas.auth import AuthResponse, LoginRequest, RefreshRequest, RefreshResponse, RegisterRequest, UserOut
+from app.services.auth import authenticate_user, build_token_pair, create_user
 
 router = APIRouter()
 
 
 @router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
 async def register(body: RegisterRequest, db: AsyncSession = Depends(get_db)):
-    # TODO: check if email already exists — raise 409 if so
-    # TODO: if role == "student", validate matric_no is present — raise 422 if missing
-    # TODO: hash password with hash_password() from core.security
-    # TODO: insert new User row
-    # TODO: create access + refresh tokens with create_access_token / create_refresh_token
-    #       include {"sub": str(user.id), "role": user.role} in token payload
-    # TODO: return AuthResponse
-    raise NotImplementedError
+    user = await create_user(db, body)
+    access, refresh = build_token_pair(user)
+    return AuthResponse(user=UserOut.model_validate(user), token=access, refreshToken=refresh)
 
 
 @router.post("/login", response_model=AuthResponse)
 async def login(body: LoginRequest, db: AsyncSession = Depends(get_db)):
-    # TODO: fetch user by email — raise 401 if not found
-    # TODO: verify role matches — raise 401 if mismatch
-    # TODO: verify password with verify_password() from core.security — raise 401 if wrong
-    # TODO: create access + refresh tokens
-    # TODO: return AuthResponse
-    raise NotImplementedError
+    user = await authenticate_user(db, body)
+    access, refresh = build_token_pair(user)
+    return AuthResponse(user=UserOut.model_validate(user), token=access, refreshToken=refresh)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout():
-    # TODO: optionally blocklist the token (store jti in Redis or a revoked_tokens table)
-    # TODO: for now, client just discards the token — this endpoint is a no-op placeholder
     return
 
 
 @router.post("/refresh", response_model=RefreshResponse)
 async def refresh(body: RefreshRequest, db: AsyncSession = Depends(get_db)):
-    # TODO: decode body.refreshToken — raise 401 if invalid or expired
-    # TODO: verify token type == "refresh"
-    # TODO: fetch user from DB to confirm they still exist and role hasn't changed
-    # TODO: issue new access + refresh token pair
-    # TODO: return RefreshResponse
-    raise NotImplementedError
+    try:
+        payload = decode_token(body.refreshToken)
+    except JWTError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+
+    if payload.get("type") != "refresh":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type")
+
+    user = await db.get(User, uuid.UUID(payload["sub"]))
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+
+    access, refresh_token = build_token_pair(user)
+    return RefreshResponse(token=access, refreshToken=refresh_token)
