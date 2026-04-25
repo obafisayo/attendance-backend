@@ -4,10 +4,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.models.attendance import Attendance
+from app.models.course import Course
 from app.models.session import Session, SessionToken
 from app.models.user import User
 from app.core.security import verify_ble_signature
-from app.schemas.attendance import MarkAttendanceRequest, MarkAttendanceResponse, ProfessorAttendanceRecord
+from app.schemas.attendance import (
+    MarkAttendanceRequest,
+    MarkAttendanceResponse,
+    ProfessorAttendanceRecord,
+    StudentAttendanceRecord,
+)
 
 TOKEN_FRESHNESS_MS = 30_000  # reject BLE tokens older than 30 seconds
 
@@ -23,16 +29,43 @@ async def mark_attendance(
     if now_ms - body.ts > TOKEN_FRESHNESS_MS:
         return MarkAttendanceResponse(success=False, error="stale_token")
 
-    # TODO: Step 2 — fetch session by body.s, return "session_ended" if not active
-    # TODO: Step 3 — fetch SessionToken where token_id == body.t and session matches
-    #               return "invalid_token" if not found or expired
-    # TODO: Step 4 — verify_ble_signature(s=body.s, t=body.t, ts=body.ts, sig=body.sig)
-    #               return "invalid_signature" if fails
-    # TODO: Step 5 — check Attendance for (session_id, student_id) uniqueness
-    #               return "already_marked" if exists
-    # TODO: Step 6 — insert Attendance row, set token.used = True, commit
-    # TODO: return MarkAttendanceResponse(success=True, markedAt=record.marked_at)
-    raise NotImplementedError
+    # Step 2 — fetch session, check active
+    session = await db.get(Session, uuid.UUID(body.s))
+    if session is None or session.status != "active":
+        return MarkAttendanceResponse(success=False, error="session_ended")
+
+    # Step 3 — fetch token, check not expired
+    token = (await db.execute(
+        select(SessionToken).where(
+            SessionToken.session_id == session.id,
+            SessionToken.token_id == body.t,
+            SessionToken.expires_at > datetime.now(timezone.utc),
+        )
+    )).scalar_one_or_none()
+    if not token:
+        return MarkAttendanceResponse(success=False, error="invalid_token")
+
+    # Step 4 — verify BLE signature
+    if not verify_ble_signature(s=body.s, t=body.t, ts=body.ts, sig=body.sig):
+        return MarkAttendanceResponse(success=False, error="invalid_signature")
+
+    # Step 5 — check duplicate
+    dup = (await db.execute(
+        select(Attendance).where(
+            Attendance.session_id == session.id,
+            Attendance.student_id == uuid.UUID(student_id),
+        )
+    )).scalar_one_or_none()
+    if dup:
+        return MarkAttendanceResponse(success=False, error="already_marked")
+
+    # Step 6 — insert attendance, mark token used
+    record = Attendance(session_id=session.id, student_id=uuid.UUID(student_id), token_id=body.t)
+    token.used = True
+    db.add(record)
+    await db.commit()
+    await db.refresh(record)
+    return MarkAttendanceResponse(success=True, markedAt=record.marked_at)  # type: ignore[arg-type]
 
 
 async def get_student_history(
@@ -41,12 +74,30 @@ async def get_student_history(
     course_id: str | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
-) -> list:
-    # TODO: query attendance JOIN sessions JOIN courses WHERE student_id = student_id
-    # TODO: apply course_id filter if provided
-    # TODO: apply from_date / to_date filters on attendance.marked_at
-    # TODO: return list of StudentAttendanceRecord
-    raise NotImplementedError
+) -> list[StudentAttendanceRecord]:
+    q = (
+        select(Attendance, Session, Course)
+        .join(Session, Attendance.session_id == Session.id)
+        .join(Course, Session.course_id == Course.id)
+        .where(Attendance.student_id == uuid.UUID(student_id))
+    )
+    if course_id:
+        q = q.where(Course.id == uuid.UUID(course_id))
+    if from_date:
+        q = q.where(Attendance.marked_at >= from_date)
+    if to_date:
+        q = q.where(Attendance.marked_at <= to_date)
+
+    rows = (await db.execute(q)).all()
+    return [
+        StudentAttendanceRecord(
+            session_id=a.session_id,
+            course_code=c.code,
+            course_name=c.name,
+            marked_at=a.marked_at,
+        )
+        for a, s, c in rows
+    ]
 
 
 async def get_session_attendance(db: AsyncSession, session_id: str) -> list[ProfessorAttendanceRecord]:
