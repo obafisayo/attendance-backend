@@ -103,6 +103,12 @@ tests/
 - `app/routers/attendance.py` — `POST /attendance` (student auth), `GET /attendance/me` (student history with optional filters)
 - `tests/test_attendance.py` — 8 passing tests covering success, stale token, inactive session, invalid token, bad signature, duplicate mark, student history, history filtered by course
 
+**Task 4 — Courses (merged):**
+- `app/services/course.py` — `get_courses_for_professor()` (with student count), `get_courses_for_student()` (via enrollments, with student count), `export_course_attendance()` (filterable by date range)
+- `app/routers/courses.py` — `GET /courses` (role-aware: professor sees own, student sees enrolled), `GET /courses/{id}/attendance/export` (CSV + XLSX, professor only, 403/404 guards)
+- `requirements.txt` — added `openpyxl>=3.1.0`
+- `tests/test_courses.py` — 8 passing tests covering professor list, student list, student count, enrollment filter, CSV export, XLSX export, wrong owner, not found
+
 ---
 
 ## Shared files — do not modify without team coordination
@@ -131,7 +137,7 @@ Each task owns a router + service + test file. There is zero file overlap betwee
 | 1. Auth | `feat/auth` | `done` |
 | 2. Sessions | `feat/sessions` | `done` |
 | 3. Attendance | `feat/attendance` | `done` |
-| 4. Courses | `feat/courses` | `pending` |
+| 4. Courses | `feat/courses` | `done` |
 | 5. ML/Face | `feat/ml` | `pending` |
 
 > **Claude instruction:** If a task above shows `done`, its files are complete. Do not reopen, rewrite, or re-examine them unless the user explicitly says something is broken. Read the file to understand what was built, not to improve it.
