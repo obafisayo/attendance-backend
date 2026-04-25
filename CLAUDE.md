@@ -95,8 +95,13 @@ tests/
 **Task 2 — Sessions (merged):**
 - `app/services/session.py` — `get_session()`, `create_session()` (409 on duplicate active), `register_token()` (BLE sig validation, expires_at = now+25s), `end_session()`
 - `app/routers/sessions.py` — all 4 endpoints with ownership guards. Note: `SessionOut` has camelCase fields that don't auto-map from snake_case model — use `_to_session_out()` helper to construct manually
-- `app/services/attendance.py` — `get_session_attendance()` implemented here (needed by sessions router); `mark_attendance()` and `get_student_history()` still raise NotImplementedError (Task 3)
+- `app/services/attendance.py` — `get_session_attendance()` implemented here (needed by sessions router)
 - `tests/test_sessions.py` — 11 passing tests. Tests seed Course rows directly via `db` fixture (no courses API yet). `client` and `db` fixtures share the same AsyncSession instance via pytest fixture deduplication
+
+**Task 3 — Attendance (merged):**
+- `app/services/attendance.py` — `mark_attendance()` (all 6 steps: freshness, session active, token valid, BLE sig, duplicate, insert + token.used=True), `get_student_history()` (filterable by course_id, from_date, to_date)
+- `app/routers/attendance.py` — `POST /attendance` (student auth), `GET /attendance/me` (student history with optional filters)
+- `tests/test_attendance.py` — 8 passing tests covering success, stale token, inactive session, invalid token, bad signature, duplicate mark, student history, history filtered by course
 
 ---
 
@@ -125,7 +130,7 @@ Each task owns a router + service + test file. There is zero file overlap betwee
 |---|---|---|
 | 1. Auth | `feat/auth` | `done` |
 | 2. Sessions | `feat/sessions` | `done` |
-| 3. Attendance | `feat/attendance` | `pending` |
+| 3. Attendance | `feat/attendance` | `done` |
 | 4. Courses | `feat/courses` | `pending` |
 | 5. ML/Face | `feat/ml` | `pending` |
 
