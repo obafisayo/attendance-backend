@@ -35,44 +35,67 @@ The mobile app (separate repo) broadcasts a BLE payload containing a session ID 
 
 ```
 app/
-  main.py              # App entry point, CORS, router registration
+  main.py              # App entry point, CORS, rate limiter, router registration
   config.py            # Pydantic-settings — reads from .env
   database.py          # Async engine, AsyncSessionLocal, Base, get_db()
   core/
-    security.py        # COMPLETE — hash_password, verify_password, create_access_token,
-                       #            create_refresh_token, decode_token, verify_ble_signature
+    security.py        # COMPLETE — JWT helpers, BLE signature, token blocklist (block/check)
     dependencies.py    # COMPLETE — require_professor, require_student, get_current_user_id
+                       #            (all three check token blocklist via DB)
   models/              # COMPLETE — do not modify without a migration
-    user.py            # User (id, email, matric_no, password_hash, role, full_name)
+    user.py            # User (id, email, matric_no, password_hash, role, full_name,
+                       #        failed_login_attempts, locked_until)
     course.py          # Course, Enrollment (student↔course many-to-many)
     session.py         # Session, SessionToken (BLE token rotation rows)
     attendance.py      # Attendance (UniqueConstraint on session_id+student_id)
+    blocklist.py       # TokenBlocklist (jti PK, expires_at, blocked_at)
   schemas/             # COMPLETE — Pydantic v2 request/response shapes
-    auth.py            # RegisterRequest, LoginRequest, AuthResponse, RefreshRequest/Response
+    auth.py            # RegisterRequest (password validator), LoginRequest, AuthResponse,
+                       #   RefreshRequest/Response, ChangePasswordRequest
     session.py         # CreateSessionRequest, SessionTokenRequest, SessionOut, SessionTokenOut
-    attendance.py      # MarkAttendanceRequest/Response, StudentHistoryResponse, SessionAttendanceResponse
-    course.py          # CourseOut, CourseListResponse
-  routers/             # Route handlers — all raise NotImplementedError, TODOs inside
-    auth.py
-    sessions.py
-    attendance.py
-    courses.py
-    ml.py
-  services/            # Business logic — all raise NotImplementedError except noted
-    auth.py            # build_token_pair() COMPLETE — create_user/authenticate_user TODO
-    session.py         # All TODO
-    attendance.py      # Freshness check (Step 1) COMPLETE — Steps 2–6 TODO
-    face.py            # All TODO (ML stub)
+    attendance.py      # MarkAttendanceRequest/Response (incl. not_enrolled error),
+                       #   StudentHistoryResponse, SessionAttendanceResponse
+    course.py          # CourseOut, CourseListResponse, CreateCourseRequest, UpdateCourseRequest,
+                       #   StudentStatsRecord, CourseStatsResponse, BulkEnrollResponse
+    user.py            # ProfileResponse, UpdateProfileRequest
+  routers/             # COMPLETE — all endpoints wired up
+    auth.py            # register, login (rate-limited), logout, refresh, change-password
+    sessions.py        # create, list, get, register-token, end
+    attendance.py      # mark, student-history
+    courses.py         # CRUD, enroll, bulk-enroll, remove-student, stats, export
+    enrollments.py     # student self-enroll, unenroll
+    users.py           # get/update profile
+    dashboard.py       # professor summary
+    ml.py              # stub (not yet implemented)
+  services/            # COMPLETE (except ML)
+    auth.py            # create_user, authenticate_user (lockout logic), build_token_pair,
+                       #   change_password
+    session.py         # get_session, create_session, register_token, end_session
+    attendance.py      # mark_attendance (7 steps incl. enrollment check),
+                       #   get_student_history, get_session_attendance
+    course.py          # create_course, get_course_by_id, update_course, delete_course,
+                       #   enroll_student_by_identifier, bulk_enroll_students,
+                       #   remove_student, get_course_stats,
+                       #   get_courses_for_professor, get_courses_for_student,
+                       #   export_course_attendance
+    face.py            # stub (ML — not yet implemented)
   ml/
     face_recognition.py  # FaceRecognitionModel stub — ML deps not yet installed
 alembic/
   env.py               # Configured — strips +asyncpg, imports all models
   versions/
-    0001_initial_schema.py  # All 6 tables + enums — run this first
+    0001_initial_schema.py       # Initial tables + enums
+    0002_security_improvements.py  # token_blocklist table + lockout columns on users
 tests/
-  test_auth.py         # Skeleton — test cases written as comments
-  test_sessions.py     # Skeleton
-  test_attendance.py   # Skeleton
+  conftest.py          # Test DB setup, clean_tables + client fixtures
+  test_auth.py         # 16 passing tests (register, login, lockout, refresh rotation,
+                       #   logout blocklist, change-password)
+  test_sessions.py     # 11 passing tests
+  test_attendance.py   # 8 passing tests (incl. not_enrolled guard)
+  test_courses.py      # 8 passing tests (incl. CSV/XLSX export)
+  test_users.py        # 5 passing tests
+  test_enrollments.py  # 6 passing tests
+  test_dashboard.py    # 3 passing tests
 ```
 
 ---
@@ -80,40 +103,48 @@ tests/
 ## What is already done (do not rewrite)
 
 - All SQLAlchemy models with relationships, FK constraints, and the `UniqueConstraint("session_id", "student_id")` on attendance
-- `core/security.py` — full JWT and BLE signature logic
-- `core/dependencies.py` — all three auth dependency functions
+- `core/security.py` — full JWT + BLE signature logic + token blocklist (`block_token`, `is_token_blocked`)
+- `core/dependencies.py` — all three auth dependency functions (each checks token blocklist via DB)
 - All Pydantic schemas
-- Alembic migration `0001_initial_schema.py`
-- `docker-compose.yml` (postgres + api), `Dockerfile`, `README.md`
-- `tests/conftest.py` — test DB setup, `clean_tables` fixture (truncates all tables between tests), `client` fixture (HTTPX AsyncClient with DB override)
+- Alembic migrations `0001_initial_schema.py` and `0002_security_improvements.py`
+- `docker-compose.yml` (postgres port **5433**, api), `Dockerfile`
+- `tests/conftest.py` — test DB setup, `clean_tables` fixture, `client` and `db` fixtures
 
-**Task 1 — Auth (merged PR #1):**
-- `app/services/auth.py` — `create_user()` (duplicate email/matric 409, student matric validation 422, bcrypt hash), `authenticate_user()` (fetch by email+role, verify password), `build_token_pair()`
-- `app/routers/auth.py` — `POST /auth/register`, `POST /auth/login`, `POST /auth/logout` (no-op), `POST /auth/refresh` (decode → assert type=="refresh" → re-fetch user → new pair)
-- `tests/test_auth.py` — 9 passing tests covering register, duplicate, login, wrong password/role, refresh valid/invalid
+**Task 1 — Auth (done):**
+- `app/services/auth.py` — `create_user()` (duplicate email/matric 409, student matric 422, bcrypt hash, password policy enforced by schema), `authenticate_user()` (lockout after 5 failures for 15 min, 429 response), `change_password()`
+- `app/routers/auth.py` — `POST /auth/register`, `POST /auth/login` (rate-limited 20/min), `POST /auth/logout` (real token revocation), `POST /auth/refresh` (rotation — old token revoked, blocklist check before issuing new), `POST /auth/change-password`
+- `tests/test_auth.py` — 16 passing tests
 
-**Task 2 — Sessions (merged):**
+**Task 2 — Sessions (done):**
 - `app/services/session.py` — `get_session()`, `create_session()` (409 on duplicate active), `register_token()` (BLE sig validation, expires_at = now+25s), `end_session()`
-- `app/routers/sessions.py` — all 4 endpoints with ownership guards. Note: `SessionOut` has camelCase fields that don't auto-map from snake_case model — use `_to_session_out()` helper to construct manually
-- `app/services/attendance.py` — `get_session_attendance()` implemented here (needed by sessions router)
-- `tests/test_sessions.py` — 11 passing tests. Tests seed Course rows directly via `db` fixture (no courses API yet). `client` and `db` fixtures share the same AsyncSession instance via pytest fixture deduplication
+- `app/routers/sessions.py` — POST create, GET list, GET detail, POST token, POST end — all with ownership guards. Note: `SessionOut` has camelCase fields → use `_to_session_out()` helper
+- `app/services/attendance.py` — `get_session_attendance()` (needed by sessions router)
+- `tests/test_sessions.py` — 11 passing tests
 
-**Task 3 — Attendance (merged):**
-- `app/services/attendance.py` — `mark_attendance()` (all 6 steps: freshness, session active, token valid, BLE sig, duplicate, insert + token.used=True), `get_student_history()` (filterable by course_id, from_date, to_date)
-- `app/routers/attendance.py` — `POST /attendance` (student auth), `GET /attendance/me` (student history with optional filters)
-- `tests/test_attendance.py` — 8 passing tests covering success, stale token, inactive session, invalid token, bad signature, duplicate mark, student history, history filtered by course
+**Task 3 — Attendance (done):**
+- `app/services/attendance.py` — `mark_attendance()` (7 steps: freshness, session active, token valid, BLE sig, **enrollment check**, duplicate, insert + token.used=True), `get_student_history()` (filterable)
+- `app/routers/attendance.py` — `POST /attendance`, `GET /attendance/me`
+- `tests/test_attendance.py` — 8 passing tests
 
-**Task 4 — Courses (merged):**
-- `app/services/course.py` — `get_courses_for_professor()` (with student count), `get_courses_for_student()` (via enrollments, with student count), `export_course_attendance()` (filterable by date range)
-- `app/routers/courses.py` — `GET /courses` (role-aware: professor sees own, student sees enrolled), `GET /courses/{id}/attendance/export` (CSV + XLSX, professor only, 403/404 guards)
-- `requirements.txt` — added `openpyxl>=3.1.0`
-- `tests/test_courses.py` — 8 passing tests covering professor list, student list, student count, enrollment filter, CSV export, XLSX export, wrong owner, not found
+**Task 4 — Courses (done):**
+- `app/services/course.py` — full CRUD, `enroll_student_by_identifier()` (by email or matric), `bulk_enroll_students()`, `remove_student()`, `get_course_stats()`, `export_course_attendance()` (CSV + XLSX, date-filterable)
+- `app/routers/courses.py` — POST/GET/PUT/DELETE /courses, POST enroll, POST enroll/bulk (CSV upload), DELETE student, GET stats, GET export
+- `requirements.txt` — added `openpyxl>=3.1.0`, `slowapi>=0.1.9`
+- `tests/test_courses.py` — 8 passing tests
+
+**Beyond original tasks — Security & UX improvements (all done):**
+- `app/models/blocklist.py` + migration `0002` — JTI-based token blocklist table
+- `app/models/user.py` — added `failed_login_attempts`, `locked_until` columns (migration `0002`)
+- `app/schemas/auth.py` — `ChangePasswordRequest`; `RegisterRequest` password validator (8+ chars, 1+ digit)
+- `app/routers/users.py` + `app/schemas/user.py` — `GET /users/me`, `PUT /users/me`
+- `app/routers/enrollments.py` — `POST /enrollments` (student self-enroll), `DELETE /enrollments/{course_id}`
+- `app/routers/dashboard.py` — `GET /dashboard/summary` (professor: total courses, sessions this month, total students)
+- `app/main.py` — slowapi rate limiter wired, CORS locked in production
+- `tests/test_users.py`, `tests/test_enrollments.py`, `tests/test_dashboard.py` — all passing
 
 ---
 
 ## Shared files — do not modify without team coordination
-
-These files are shared infrastructure. Editing them risks breaking everyone:
 
 | File | Rule |
 |---|---|
@@ -122,95 +153,25 @@ These files are shared infrastructure. Editing them risks breaking everyone:
 | `app/core/dependencies.py` | Frozen. |
 | `app/database.py` | Frozen. |
 | `alembic/env.py` | Frozen. |
-| `requirements.txt` | Coordinate before adding deps — Tasks 4 and 5 both touch this file. |
+| `requirements.txt` | Coordinate before adding deps — Task 5 (ML) will touch this file. |
 
 ---
 
-## The 5 backend tasks
+## Task status
 
-Each task owns a router + service + test file. There is zero file overlap between tasks 1–4 by design.
+| Task | Status |
+|---|---|
+| 1. Auth | `done` |
+| 2. Sessions | `done` |
+| 3. Attendance | `done` |
+| 4. Courses + Enrollments + Dashboard + Users | `done` |
+| 5. ML/Face | `pending` |
 
-**Status key:** `pending` = not started | `in progress` = branch open | `done` = merged into master — do not re-implement
-
-| Task | Branch | Status |
-|---|---|---|
-| 1. Auth | `feat/auth` | `done` |
-| 2. Sessions | `feat/sessions` | `done` |
-| 3. Attendance | `feat/attendance` | `done` |
-| 4. Courses | `feat/courses` | `done` |
-| 5. ML/Face | `feat/ml` | `pending` |
-
-> **Claude instruction:** If a task above shows `done`, its files are complete. Do not reopen, rewrite, or re-examine them unless the user explicitly says something is broken. Read the file to understand what was built, not to improve it.
-
-
-### Task 1 — `feat/auth` (DO THIS FIRST)
-
-Every other endpoint requires a valid JWT. Nothing else can be tested until auth is working.
-
-**Files:**
-- `app/services/auth.py` — implement `create_user()` and `authenticate_user()`
-- `app/routers/auth.py` — implement register, login, refresh
-
-**Key rules:**
-- `create_user()`: check duplicate email (409), duplicate matric_no (409), matric_no required for students (422), hash with `hash_password()`, insert, commit, refresh
-- `authenticate_user()`: fetch by email+role (401 if not found), `verify_password()` (401 if wrong)
-- Refresh: decode token, assert `payload["type"] == "refresh"`, re-fetch user from DB, issue new pair
-- `tests/test_auth.py` — fill in all test cases
+> **Claude instruction:** Tasks 1–4 are complete. Do not reopen, rewrite, or re-examine their files unless the user explicitly says something is broken.
 
 ---
 
-### Task 2 — `feat/sessions` (after Task 1 merges)
-
-**Files:**
-- `app/services/session.py` — implement `create_session`, `register_token`, `end_session`, `get_session`
-- `app/routers/sessions.py` — implement all 4 endpoints
-
-**Key rules:**
-- `create_session()`: 409 if an active session already exists for this course
-- `register_token()`: call `verify_ble_signature(s=str(session.id), t=t, ts=ts, sig=sig)` — 400 if fails; `expires_at = now + 25s`
-- `end_session()`: set `status="ended"`, `ended_at=now()`
-- All endpoints: verify ownership (professor owns the course/session) — 403 if not
-- `tests/test_sessions.py` — fill in all test cases
-
----
-
-### Task 3 — `feat/attendance` (after Task 2 merges)
-
-**Files:**
-- `app/services/attendance.py` — implement Steps 2–6 in `mark_attendance()`, implement `get_student_history()`, `get_session_attendance()`
-- `app/routers/attendance.py` — wire up both endpoints
-
-**Validation order in `mark_attendance()` (Step 1 already done):**
-1. ~~Freshness check~~ (done)
-2. Fetch session by `body.s` → `session_ended` if not active
-3. Fetch `SessionToken` where `token_id == body.t` → `invalid_token` if not found or expired
-4. `verify_ble_signature()` → `invalid_signature` if fails
-5. Check for duplicate `(session_id, student_id)` → `already_marked` if exists
-6. Insert `Attendance`, set `token.used = True`, commit
-
-**Return shape:** `MarkAttendanceResponse(success=True/False, markedAt=..., error=...)`
-- `tests/test_attendance.py` — fill in all test cases
-
----
-
-### Task 4 — `feat/courses` (after Task 1 merges, parallel with Tasks 2–3)
-
-**Files:**
-- `app/routers/courses.py` — implement `list_courses` and `export_attendance`
-- `app/services/course.py` — create this file; `get_courses_for_professor()`, `get_courses_for_student()`, `export_course_attendance()`
-- `requirements.txt` — add `openpyxl>=3.1.0`
-
-**Key rules:**
-- `list_courses`: fetch user role from DB first; professors see their own courses; students see via enrollments; include `studentCount` (count of enrollments)
-- Export columns: `Student Name`, `Matric No`, `Session Date`, `Marked At`
-- Return `StreamingResponse` with `Content-Disposition: attachment; filename="attendance_{course_code}.{format}"`
-- Support both `csv` (stdlib `csv` module) and `xlsx` (`openpyxl`)
-
----
-
-### Task 5 — `feat/ml` (anytime, lowest priority)
-
-**Coordinate with Task 4 on `requirements.txt` — both touch it.**
+### Task 5 — `feat/ml` (lowest priority, not yet started)
 
 **Files:**
 - `requirements.txt` — uncomment the ML block (`deepface`, `tensorflow`, `opencv-python`, `numpy`, `pillow`)
@@ -222,29 +183,15 @@ Every other endpoint requires a valid JWT. Nothing else can be tested until auth
 
 ---
 
-## Task merge order
+## Frontend / mobile integration points
 
-```
-Task 1 (auth)
-    └── Task 2 (sessions)
-            └── Task 3 (attendance)
-    └── Task 4 (courses)       ← parallel with 2 and 3
-Task 5 (ml)                    ← fully independent
-```
-
-Merge Task 1 before any PR review for Tasks 2–4. Tasks 3 and 4 can merge in either order.
-
----
-
-## Frontend tasks (summary)
-
-The frontend team consumes this API. Key integration points:
-
-- **Auth flow** — `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`. Store `token` (access) and `refreshToken`. Access token expires in 15 min; auto-refresh using `refreshToken` (7 days).
-- **Professor flow** — create course → start session (`POST /sessions`) → broadcast BLE → register rotating tokens (`POST /sessions/{id}/token` every ~20s) → end session → view/export attendance
-- **Student flow** — scan BLE → parse payload (`s`, `t`, `ts`, `sig`) → `POST /attendance` → show result (`success`, `error`)
-- **BLE signature** — mobile must compute `SHA256(JSON.stringify({s,t,ts}) + ENCRYPTION_KEY).slice(0,10)` where JSON key order is insertion order `{s, t, ts}`. This must match `verify_ble_signature()` in `core/security.py` exactly.
-- **Attendance export** — `GET /courses/{id}/attendance/export?format=csv` or `?format=xlsx` with optional `from_date` / `to_date` query params (ISO date strings)
+- **Auth flow** — `POST /auth/register`, `POST /auth/login`, `POST /auth/refresh`. Store `token` (access, 15 min) and `refreshToken` (7 days). Auto-refresh when 401 is returned.
+- **Logout** — `POST /auth/logout` with Bearer token. Token is immediately revoked server-side.
+- **Professor flow** — create course → enroll students (self-enroll or professor-enroll) → start session (`POST /sessions`) → broadcast BLE → register rotating tokens (`POST /sessions/{id}/token` every ~20 s) → end session → view stats (`GET /courses/{id}/stats`) → export attendance
+- **Student flow** — enroll in courses (`POST /enrollments`) → scan BLE → parse payload (`s`, `t`, `ts`, `sig`) → `POST /attendance` → show result (`success`, `error`). Student must be enrolled before attendance can be marked.
+- **BLE signature** — mobile must compute `SHA256(JSON.stringify({s,t,ts}) + ENCRYPTION_KEY).slice(0,10)` where JSON key order is insertion order `{s, t, ts}`. This must match `verify_ble_signature()` in `core/security.py` exactly. **Do not change either side without updating both.**
+- **Attendance export** — `GET /courses/{id}/attendance/export?format=csv` or `?format=xlsx` with optional `from_date` / `to_date` query params (ISO date strings). Professor only.
+- **Dashboard** — `GET /dashboard/summary` — professor-only summary card data.
 
 ---
 
@@ -252,9 +199,9 @@ The frontend team consumes this API. Key integration points:
 
 ```bash
 cp .env.example .env          # credentials match docker-compose defaults
-docker compose up db -d       # start postgres
+docker compose up db -d       # start postgres on host port 5433
 pip install -r requirements.txt
-alembic upgrade head           # create all tables
+alembic upgrade head           # run both migrations
 uvicorn app.main:app --reload  # http://localhost:8000/docs
 ```
 
@@ -264,10 +211,10 @@ uvicorn app.main:app --reload  # http://localhost:8000/docs
 
 | Variable | Purpose |
 |---|---|
-| `DATABASE_URL` | `postgresql+asyncpg://attendance:attendance@localhost:5432/attendance_db` |
-| `SECRET_KEY` | JWT signing key — keep secret |
+| `DATABASE_URL` | `postgresql+asyncpg://attendance:attendance@localhost:5433/attendance_db` (host port 5433) |
+| `SECRET_KEY` | JWT signing key — keep secret, use a random 32-byte hex string in production |
 | `ENCRYPTION_KEY` | Must match `EXPO_PUBLIC_ENCRYPTION_KEY` in mobile app |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Default 15 |
 | `REFRESH_TOKEN_EXPIRE_DAYS` | Default 7 |
 | `ALGORITHM` | HS256 |
-| `ENVIRONMENT` | `development` or `production` |
+| `ENVIRONMENT` | `development` (CORS open) or `production` (CORS locked to `_PROD_ORIGINS` in main.py) |
