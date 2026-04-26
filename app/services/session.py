@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.models.session import Session, SessionToken
-from app.core.security import verify_ble_signature
 
 
 async def get_session(db: AsyncSession, session_id: str) -> Session | None:
@@ -44,15 +43,7 @@ async def register_token(
     db: AsyncSession,
     session: Session,
     t: str,
-    ts: int,
-    sig: str,
 ) -> SessionToken:
-    if not verify_ble_signature(s=str(session.id), t=t, ts=ts, sig=sig):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid BLE signature",
-        )
-
     token = SessionToken(
         session_id=session.id,
         token_id=t,

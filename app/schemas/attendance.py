@@ -5,15 +5,7 @@ from datetime import datetime
 
 
 class MarkAttendanceRequest(BaseModel):
-    # raw BLE payload shape — must match what the mobile app broadcasts
-    s: str   # session ID
-    t: str   # token ID
-    ts: int  # timestamp in milliseconds
-    sig: str # truncated SHA256 (first 10 chars)
-
-    # TODO: add face verification fields when ML is integrated
-    # face_frames: list[str] | None = None  # base64-encoded frames
-    # face_embedding: list[float] | None = None
+    token: str  # 6-char token received from BLE broadcast
 
 
 class AttendanceRecord(BaseModel):
@@ -28,7 +20,7 @@ class AttendanceRecord(BaseModel):
 class MarkAttendanceResponse(BaseModel):
     success: bool
     markedAt: datetime | None = None
-    error: Literal["invalid_token", "already_marked", "session_ended", "stale_token", "invalid_signature"] | None = None
+    error: Literal["invalid_token", "already_marked", "session_ended"] | None = None
 
 
 class StudentAttendanceRecord(BaseModel):
@@ -40,6 +32,7 @@ class StudentAttendanceRecord(BaseModel):
 
 class StudentHistoryResponse(BaseModel):
     records: list[StudentAttendanceRecord]
+    total_sessions: int | None = None  # populated when course_id filter is provided
 
 
 class ProfessorAttendanceRecord(BaseModel):

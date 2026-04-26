@@ -1,16 +1,15 @@
-import hashlib
-import json
-import time
 import uuid
+from datetime import datetime, timezone, timedelta
 
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update
 
-from app.config import settings
 from app.models.course import Course
+from app.models.session import SessionToken
 
 
-# --- fixtures & helpers ---
+# --- helpers ---
 
 PROFESSOR = {
     "email": "prof@test.com",
@@ -46,17 +45,12 @@ async def create_course(db: AsyncSession, professor_id: str) -> Course:
     return course
 
 
-def ble_sig(session_id: str, t: str, ts: int) -> str:
-    payload = json.dumps({"s": session_id, "t": t, "ts": ts}, separators=(",", ":"))
-    return hashlib.sha256((payload + settings.ENCRYPTION_KEY).encode()).hexdigest()[:10]
-
-
 def auth_header(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def setup_session_with_token(client: AsyncClient, db: AsyncSession) -> tuple[str, str, str, int]:
-    """Returns: (student_token, session_id, token_id, ts)"""
+async def setup_session_with_token(client: AsyncClient, db: AsyncSession) -> tuple[str, str, str]:
+    """Returns: (student_token, session_id, token_id)"""
     prof_token, prof_id = await register_and_login(client, PROFESSOR)
     course = await create_course(db, prof_id)
 
@@ -67,29 +61,26 @@ async def setup_session_with_token(client: AsyncClient, db: AsyncSession) -> tup
     )
     session_id = sess_res.json()["id"]
 
-    t = "tok_abc123"
-    ts = int(time.time() * 1000)
-    sig = ble_sig(session_id, t, ts)
+    t = "tok001"
     await client.post(
         f"/sessions/{session_id}/token",
-        json={"t": t, "ts": ts, "sig": sig},
+        json={"t": t},
         headers=auth_header(prof_token),
     )
 
     student_token, _ = await register_and_login(client, STUDENT)
-    return student_token, session_id, t, ts
+    return student_token, session_id, t
 
 
 # --- tests ---
 
 
 async def test_mark_attendance_success(client: AsyncClient, db: AsyncSession):
-    student_token, session_id, t, _ = await setup_session_with_token(client, db)
+    student_token, session_id, t = await setup_session_with_token(client, db)
 
-    ts = int(time.time() * 1000)
     res = await client.post(
         "/attendance",
-        json={"s": session_id, "t": t, "ts": ts, "sig": ble_sig(session_id, t, ts)},
+        json={"token": t},
         headers=auth_header(student_token),
     )
     assert res.status_code == 200
@@ -98,17 +89,25 @@ async def test_mark_attendance_success(client: AsyncClient, db: AsyncSession):
     assert data["markedAt"] is not None
 
 
-async def test_stale_token(client: AsyncClient, db: AsyncSession):
-    student_token, session_id, t, _ = await setup_session_with_token(client, db)
+async def test_expired_token(client: AsyncClient, db: AsyncSession):
+    """Token found in DB but expires_at is in the past → invalid_token."""
+    student_token, session_id, t = await setup_session_with_token(client, db)
 
-    stale_ts = int(time.time() * 1000) - 60_000
+    # Expire the token directly
+    await db.execute(
+        update(SessionToken)
+        .where(SessionToken.token_id == t)
+        .values(expires_at=datetime.now(timezone.utc) - timedelta(seconds=1))
+    )
+    await db.commit()
+
     res = await client.post(
         "/attendance",
-        json={"s": session_id, "t": t, "ts": stale_ts, "sig": ble_sig(session_id, t, stale_ts)},
+        json={"token": t},
         headers=auth_header(student_token),
     )
     assert res.status_code == 200
-    assert res.json()["error"] == "stale_token"
+    assert res.json()["error"] == "invalid_token"
 
 
 async def test_inactive_session(client: AsyncClient, db: AsyncSession):
@@ -120,21 +119,18 @@ async def test_inactive_session(client: AsyncClient, db: AsyncSession):
     )
     session_id = sess_res.json()["id"]
 
-    t = "tok_abc123"
-    ts = int(time.time() * 1000)
-    sig = ble_sig(session_id, t, ts)
+    t = "tok001"
     await client.post(
         f"/sessions/{session_id}/token",
-        json={"t": t, "ts": ts, "sig": sig},
+        json={"t": t},
         headers=auth_header(prof_token),
     )
     await client.post(f"/sessions/{session_id}/end", headers=auth_header(prof_token))
 
     student_token, _ = await register_and_login(client, STUDENT)
-    ts2 = int(time.time() * 1000)
     res = await client.post(
         "/attendance",
-        json={"s": session_id, "t": t, "ts": ts2, "sig": ble_sig(session_id, t, ts2)},
+        json={"token": t},
         headers=auth_header(student_token),
     )
     assert res.status_code == 200
@@ -142,53 +138,67 @@ async def test_inactive_session(client: AsyncClient, db: AsyncSession):
 
 
 async def test_invalid_token(client: AsyncClient, db: AsyncSession):
-    student_token, session_id, _, _ = await setup_session_with_token(client, db)
+    student_token, session_id, _ = await setup_session_with_token(client, db)
 
-    t = "nonexistent_token"
-    ts = int(time.time() * 1000)
     res = await client.post(
         "/attendance",
-        json={"s": session_id, "t": t, "ts": ts, "sig": ble_sig(session_id, t, ts)},
+        json={"token": "nonexistent"},
         headers=auth_header(student_token),
     )
     assert res.status_code == 200
     assert res.json()["error"] == "invalid_token"
 
 
-async def test_bad_signature(client: AsyncClient, db: AsyncSession):
-    student_token, session_id, t, _ = await setup_session_with_token(client, db)
+async def test_used_token(client: AsyncClient, db: AsyncSession):
+    """Token already used → invalid_token."""
+    student_token, session_id, t = await setup_session_with_token(client, db)
 
-    ts = int(time.time() * 1000)
+    await db.execute(
+        update(SessionToken)
+        .where(SessionToken.token_id == t)
+        .values(used=True)
+    )
+    await db.commit()
+
     res = await client.post(
         "/attendance",
-        json={"s": session_id, "t": t, "ts": ts, "sig": "badsig12345"},
+        json={"token": t},
         headers=auth_header(student_token),
     )
     assert res.status_code == 200
-    assert res.json()["error"] == "invalid_signature"
+    assert res.json()["error"] == "invalid_token"
 
 
 async def test_duplicate_mark(client: AsyncClient, db: AsyncSession):
-    student_token, session_id, t, _ = await setup_session_with_token(client, db)
+    prof_token, prof_id = await register_and_login(client, PROFESSOR)
+    course = await create_course(db, prof_id)
 
-    ts = int(time.time() * 1000)
-    payload = {"s": session_id, "t": t, "ts": ts, "sig": ble_sig(session_id, t, ts)}
-    await client.post("/attendance", json=payload, headers=auth_header(student_token))
+    sess_res = await client.post(
+        "/sessions", json={"courseId": str(course.id)}, headers=auth_header(prof_token)
+    )
+    session_id = sess_res.json()["id"]
 
-    ts2 = int(time.time() * 1000)
-    payload2 = {"s": session_id, "t": t, "ts": ts2, "sig": ble_sig(session_id, t, ts2)}
-    res = await client.post("/attendance", json=payload2, headers=auth_header(student_token))
+    # Register first token, mark attendance
+    t1 = "tok001"
+    await client.post(f"/sessions/{session_id}/token", json={"t": t1}, headers=auth_header(prof_token))
+    student_token, _ = await register_and_login(client, STUDENT)
+    res = await client.post("/attendance", json={"token": t1}, headers=auth_header(student_token))
+    assert res.json()["success"] is True
+
+    # Register a second fresh token — should get already_marked
+    t2 = "tok002"
+    await client.post(f"/sessions/{session_id}/token", json={"t": t2}, headers=auth_header(prof_token))
+    res = await client.post("/attendance", json={"token": t2}, headers=auth_header(student_token))
     assert res.status_code == 200
     assert res.json()["error"] == "already_marked"
 
 
 async def test_get_student_history(client: AsyncClient, db: AsyncSession):
-    student_token, session_id, t, _ = await setup_session_with_token(client, db)
+    student_token, session_id, t = await setup_session_with_token(client, db)
 
-    ts = int(time.time() * 1000)
     await client.post(
         "/attendance",
-        json={"s": session_id, "t": t, "ts": ts, "sig": ble_sig(session_id, t, ts)},
+        json={"token": t},
         headers=auth_header(student_token),
     )
 
@@ -200,18 +210,13 @@ async def test_get_student_history(client: AsyncClient, db: AsyncSession):
 
 
 async def test_get_history_filtered_by_course_id(client: AsyncClient, db: AsyncSession):
-    student_token, session_id, t, _ = await setup_session_with_token(client, db)
+    student_token, session_id, t = await setup_session_with_token(client, db)
 
-    ts = int(time.time() * 1000)
     await client.post(
         "/attendance",
-        json={"s": session_id, "t": t, "ts": ts, "sig": ble_sig(session_id, t, ts)},
+        json={"token": t},
         headers=auth_header(student_token),
     )
-
-    # get the course_id from the history record
-    history = await client.get("/attendance/me", headers=auth_header(student_token))
-    session_id_from_record = history.json()["records"][0]["session_id"]
 
     # filter by a random course_id — should return 0 records
     res = await client.get(
@@ -221,7 +226,7 @@ async def test_get_history_filtered_by_course_id(client: AsyncClient, db: AsyncS
     assert res.status_code == 200
     assert len(res.json()["records"]) == 0
 
-    # filter without course_id — should return 1 record
+    # no filter — should return 1 record
     res = await client.get("/attendance/me", headers=auth_header(student_token))
     assert res.status_code == 200
     assert len(res.json()["records"]) == 1

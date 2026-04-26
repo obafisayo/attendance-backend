@@ -1,9 +1,12 @@
 import hashlib
 import json
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.config import settings
 
@@ -18,25 +21,50 @@ def verify_password(plain: str, hashed: str) -> bool:
     return pwd_context.verify(plain, hashed)
 
 
-def create_access_token(data: dict) -> str:
+def _make_token(data: dict, token_type: str, expire: datetime) -> str:
     payload = data.copy()
-    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     payload["exp"] = expire
-    payload["type"] = "access"
+    payload["type"] = token_type
+    payload["jti"] = str(uuid.uuid4())
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+
+
+def create_access_token(data: dict) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    return _make_token(data, "access", expire)
 
 
 def create_refresh_token(data: dict) -> str:
-    payload = data.copy()
     expire = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
-    payload["exp"] = expire
-    payload["type"] = "refresh"
-    return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    return _make_token(data, "refresh", expire)
 
 
 def decode_token(token: str) -> dict:
-    # TODO: handle token revocation (blocklist in Redis or DB) when logout is implemented
     return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+
+
+async def is_token_blocked(db: AsyncSession, jti: str) -> bool:
+    from app.models.blocklist import TokenBlocklist
+    row = await db.get(TokenBlocklist, jti)
+    return row is not None
+
+
+async def block_token(db: AsyncSession, token: str) -> None:
+    """Add a JWT to the blocklist so it cannot be used again."""
+    from app.models.blocklist import TokenBlocklist
+    try:
+        payload = decode_token(token)
+    except JWTError:
+        return
+    jti = payload.get("jti")
+    if not jti:
+        return
+    exp = payload.get("exp")
+    if not exp:
+        return
+    expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
+    db.add(TokenBlocklist(jti=jti, expires_at=expires_at))
+    await db.commit()
 
 
 def verify_ble_signature(s: str, t: str, ts: int, sig: str) -> bool:

@@ -1,6 +1,6 @@
 """
-Test DB setup. Requires a 'attendance_test' database:
-  docker compose exec db psql -U attendance -d attendance_db -c "CREATE DATABASE attendance_test;"
+Test DB setup. Requires a 'attendance_test' MySQL database accessible to the 'attendance' user:
+  sudo mysql -e "CREATE DATABASE IF NOT EXISTS attendance_test; GRANT ALL PRIVILEGES ON attendance_test.* TO 'attendance'@'localhost'; FLUSH PRIVILEGES;"
 """
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 import app.models.attendance  # noqa — register with Base
+import app.models.blocklist  # noqa
 import app.models.course  # noqa
 import app.models.session  # noqa
 import app.models.user  # noqa
@@ -18,35 +19,30 @@ from app.main import app
 
 TEST_DB_URL = settings.DATABASE_URL.replace("/attendance_db", "/attendance_test")
 
-# NullPool: each fixture gets a fresh connection — prevents asyncpg "operation in progress" errors
+# NullPool: each fixture gets a fresh connection — prevents "operation in progress" errors
 engine_test = create_async_engine(TEST_DB_URL, echo=False, poolclass=NullPool)
 TestSession = async_sessionmaker(engine_test, expire_on_commit=False, class_=AsyncSession)
 
 
 @pytest_asyncio.fixture(autouse=True)
 async def setup_db():
-    # Raw SQL drop avoids reflection queries that conflict with asyncpg inside run_sync
     async with engine_test.begin() as conn:
-        await conn.execute(text(
-            "DROP TABLE IF EXISTS attendance, session_tokens, sessions, enrollments, courses, users CASCADE"
-        ))
-        await conn.execute(text(
-            "DROP TYPE IF EXISTS user_role, session_status CASCADE"
-        ))
+        # Disable FK checks so tables can be dropped in any order (MySQL)
+        await conn.execute(text("SET FOREIGN_KEY_CHECKS=0"))
+        for table in reversed(Base.metadata.sorted_tables):
+            await conn.execute(text(f"DROP TABLE IF EXISTS `{table.name}`"))
+        await conn.execute(text("SET FOREIGN_KEY_CHECKS=1"))
 
-    # checkfirst=False: tables were just dropped, no need to reflect
     async with engine_test.begin() as conn:
         await conn.run_sync(lambda c: Base.metadata.create_all(c, checkfirst=False))
 
     yield
 
     async with engine_test.begin() as conn:
-        await conn.execute(text(
-            "DROP TABLE IF EXISTS attendance, session_tokens, sessions, enrollments, courses, users CASCADE"
-        ))
-        await conn.execute(text(
-            "DROP TYPE IF EXISTS user_role, session_status CASCADE"
-        ))
+        await conn.execute(text("SET FOREIGN_KEY_CHECKS=0"))
+        for table in reversed(Base.metadata.sorted_tables):
+            await conn.execute(text(f"DROP TABLE IF EXISTS `{table.name}`"))
+        await conn.execute(text("SET FOREIGN_KEY_CHECKS=1"))
 
 
 @pytest_asyncio.fixture

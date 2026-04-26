@@ -1,6 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, ForeignKey, DateTime, UniqueConstraint, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Column, String, ForeignKey, DateTime, UniqueConstraint, Uuid, func
 from sqlalchemy.orm import relationship
 
 from app.database import Base
@@ -9,10 +8,10 @@ from app.database import Base
 class Attendance(Base):
     __tablename__ = "attendance"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    session_id = Column(UUID(as_uuid=True), ForeignKey("sessions.id"), nullable=False)
-    student_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    token_id = Column(String, nullable=False)
+    id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id = Column(Uuid(as_uuid=True), ForeignKey("sessions.id"), nullable=False)
+    student_id = Column(Uuid(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    token_id = Column(String(10), nullable=False)
     marked_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # TODO: store face verification result when ML is integrated

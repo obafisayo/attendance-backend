@@ -7,7 +7,6 @@ Create Date: 2026-04-24
 
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID
 
 revision = "0001"
 down_revision = None
@@ -18,16 +17,16 @@ depends_on = None
 def upgrade() -> None:
     op.create_table(
         "users",
-        sa.Column("id", UUID(as_uuid=True), primary_key=True),
-        sa.Column("email", sa.String(), nullable=False),
-        sa.Column("matric_no", sa.String(), nullable=True),
-        sa.Column("password_hash", sa.String(), nullable=False),
+        sa.Column("id", sa.Uuid(as_uuid=True), primary_key=True),
+        sa.Column("email", sa.String(255), nullable=False),
+        sa.Column("matric_no", sa.String(100), nullable=True),
+        sa.Column("password_hash", sa.String(255), nullable=False),
         sa.Column(
             "role",
             sa.Enum("student", "professor", name="user_role"),
             nullable=False,
         ),
-        sa.Column("full_name", sa.String(), nullable=True),
+        sa.Column("full_name", sa.String(255), nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -41,10 +40,10 @@ def upgrade() -> None:
 
     op.create_table(
         "courses",
-        sa.Column("id", UUID(as_uuid=True), primary_key=True),
-        sa.Column("code", sa.String(), nullable=False),
-        sa.Column("name", sa.String(), nullable=False),
-        sa.Column("professor_id", UUID(as_uuid=True), sa.ForeignKey("users.id"), nullable=False),
+        sa.Column("id", sa.Uuid(as_uuid=True), primary_key=True),
+        sa.Column("code", sa.String(50), nullable=False),
+        sa.Column("name", sa.String(255), nullable=False),
+        sa.Column("professor_id", sa.Uuid(as_uuid=True), sa.ForeignKey("users.id"), nullable=False),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -55,15 +54,15 @@ def upgrade() -> None:
 
     op.create_table(
         "enrollments",
-        sa.Column("student_id", UUID(as_uuid=True), sa.ForeignKey("users.id"), primary_key=True),
-        sa.Column("course_id", UUID(as_uuid=True), sa.ForeignKey("courses.id"), primary_key=True),
+        sa.Column("student_id", sa.Uuid(as_uuid=True), sa.ForeignKey("users.id"), primary_key=True),
+        sa.Column("course_id", sa.Uuid(as_uuid=True), sa.ForeignKey("courses.id"), primary_key=True),
     )
 
     op.create_table(
         "sessions",
-        sa.Column("id", UUID(as_uuid=True), primary_key=True),
-        sa.Column("course_id", UUID(as_uuid=True), sa.ForeignKey("courses.id"), nullable=False),
-        sa.Column("professor_id", UUID(as_uuid=True), sa.ForeignKey("users.id"), nullable=False),
+        sa.Column("id", sa.Uuid(as_uuid=True), primary_key=True),
+        sa.Column("course_id", sa.Uuid(as_uuid=True), sa.ForeignKey("courses.id"), nullable=False),
+        sa.Column("professor_id", sa.Uuid(as_uuid=True), sa.ForeignKey("users.id"), nullable=False),
         sa.Column(
             "status",
             sa.Enum("active", "ended", name="session_status"),
@@ -81,9 +80,9 @@ def upgrade() -> None:
 
     op.create_table(
         "session_tokens",
-        sa.Column("id", UUID(as_uuid=True), primary_key=True),
-        sa.Column("session_id", UUID(as_uuid=True), sa.ForeignKey("sessions.id"), nullable=False),
-        sa.Column("token_id", sa.String(), nullable=False),
+        sa.Column("id", sa.Uuid(as_uuid=True), primary_key=True),
+        sa.Column("session_id", sa.Uuid(as_uuid=True), sa.ForeignKey("sessions.id"), nullable=False),
+        sa.Column("token_id", sa.String(10), nullable=False),
         sa.Column(
             "issued_at",
             sa.DateTime(timezone=True),
@@ -91,15 +90,15 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("used", sa.Boolean(), nullable=False, server_default="false"),
+        sa.Column("used", sa.Boolean(), nullable=False, server_default="0"),
     )
 
     op.create_table(
         "attendance",
-        sa.Column("id", UUID(as_uuid=True), primary_key=True),
-        sa.Column("session_id", UUID(as_uuid=True), sa.ForeignKey("sessions.id"), nullable=False),
-        sa.Column("student_id", UUID(as_uuid=True), sa.ForeignKey("users.id"), nullable=False),
-        sa.Column("token_id", sa.String(), nullable=False),
+        sa.Column("id", sa.Uuid(as_uuid=True), primary_key=True),
+        sa.Column("session_id", sa.Uuid(as_uuid=True), sa.ForeignKey("sessions.id"), nullable=False),
+        sa.Column("student_id", sa.Uuid(as_uuid=True), sa.ForeignKey("users.id"), nullable=False),
+        sa.Column("token_id", sa.String(10), nullable=False),
         sa.Column(
             "marked_at",
             sa.DateTime(timezone=True),
@@ -117,5 +116,3 @@ def downgrade() -> None:
     op.drop_table("enrollments")
     op.drop_table("courses")
     op.drop_table("users")
-    sa.Enum(name="session_status").drop(op.get_bind(), checkfirst=True)
-    sa.Enum(name="user_role").drop(op.get_bind(), checkfirst=True)

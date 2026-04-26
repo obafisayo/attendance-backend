@@ -1,12 +1,8 @@
-import hashlib
-import json
-import time
 import uuid
 
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.models.course import Course, Enrollment
 from app.models.session import Session
 
@@ -46,11 +42,6 @@ def auth_header(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
-def ble_sig(session_id: str, t: str, ts: int) -> str:
-    payload = json.dumps({"s": session_id, "t": t, "ts": ts}, separators=(",", ":"))
-    return hashlib.sha256((payload + settings.ENCRYPTION_KEY).encode()).hexdigest()[:10]
-
-
 async def create_course(db: AsyncSession, professor_id: str, code: str = "CSC401") -> Course:
     course = Course(
         code=code,
@@ -80,22 +71,19 @@ async def setup_attendance(client: AsyncClient, db: AsyncSession) -> tuple[str, 
     )
     session_id = sess_res.json()["id"]
 
-    t = "tok_abc123"
-    ts = int(time.time() * 1000)
-    sig = ble_sig(session_id, t, ts)
+    t = "tok001"
     await client.post(
         f"/sessions/{session_id}/token",
-        json={"t": t, "ts": ts, "sig": sig},
+        json={"t": t},
         headers=auth_header(prof_token),
     )
 
     student_token, student_id = await register_and_login(client, STUDENT)
     await enroll_student(db, student_id, course.id)
 
-    ts2 = int(time.time() * 1000)
     await client.post(
         "/attendance",
-        json={"s": session_id, "t": t, "ts": ts2, "sig": ble_sig(session_id, t, ts2)},
+        json={"token": t},
         headers=auth_header(student_token),
     )
 

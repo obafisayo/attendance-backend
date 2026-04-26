@@ -1,4 +1,7 @@
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import require_professor
@@ -36,6 +39,19 @@ async def _get_owned_session(
     return session
 
 
+@router.get("", response_model=list[SessionOut])
+async def list_sessions(
+    professor_id: str = Depends(require_professor),
+    db: AsyncSession = Depends(get_db),
+):
+    rows = (await db.execute(
+        select(Session)
+        .where(Session.professor_id == uuid.UUID(professor_id))
+        .order_by(Session.started_at.desc())
+    )).scalars().all()
+    return [_to_session_out(s) for s in rows]
+
+
 @router.post("", response_model=SessionOut, status_code=201)
 async def create_session(
     body: CreateSessionRequest,
@@ -52,6 +68,16 @@ async def create_session(
     return _to_session_out(session)
 
 
+@router.get("/{session_id}", response_model=SessionOut)
+async def get_session(
+    session_id: str,
+    professor_id: str = Depends(require_professor),
+    db: AsyncSession = Depends(get_db),
+):
+    session = await _get_owned_session(session_id, professor_id, db)
+    return _to_session_out(session)
+
+
 @router.post("/{session_id}/token", response_model=SessionTokenOut)
 async def register_token(
     session_id: str,
@@ -64,7 +90,7 @@ async def register_token(
     if session.status != "active":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Session is not active")
 
-    token = await session_service.register_token(db, session, body.t, body.ts, body.sig)
+    token = await session_service.register_token(db, session, body.t)
     return SessionTokenOut(tokenId=token.token_id, expiresAt=token.expires_at)
 
 

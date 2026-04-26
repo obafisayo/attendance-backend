@@ -29,5 +29,7 @@ async def get_my_attendance(
     from_date: Optional[str] = Query(None),
     to_date: Optional[str] = Query(None),
 ):
-    records = await attendance_service.get_student_history(db, student_id, course_id, from_date, to_date)
-    return StudentHistoryResponse(records=records)
+    records, total_sessions = await attendance_service.get_student_history(
+        db, student_id, course_id, from_date, to_date
+    )
+    return StudentHistoryResponse(records=records, total_sessions=total_sessions)

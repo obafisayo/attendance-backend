@@ -2,6 +2,16 @@ from pydantic import BaseModel
 import uuid
 
 
+class CreateCourseRequest(BaseModel):
+    code: str
+    name: str
+
+
+class UpdateCourseRequest(BaseModel):
+    code: str | None = None
+    name: str | None = None
+
+
 class CourseOut(BaseModel):
     id: uuid.UUID
     code: str
@@ -13,3 +23,18 @@ class CourseOut(BaseModel):
 
 class CourseListResponse(BaseModel):
     courses: list[CourseOut]
+
+
+class StudentStatsRecord(BaseModel):
+    student_id: uuid.UUID
+    student_name: str | None
+    matric_no: str | None
+    sessions_attended: int
+    total_sessions: int
+    percentage: float
+
+
+class CourseStatsResponse(BaseModel):
+    course_id: uuid.UUID
+    total_sessions: int
+    students: list[StudentStatsRecord]
