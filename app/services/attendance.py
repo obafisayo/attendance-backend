@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from app.models.attendance import Attendance
-from app.models.course import Course
+from app.models.course import Course, Enrollment
 from app.models.session import Session, SessionToken
 from app.models.user import User
 from app.core.security import verify_ble_signature
@@ -49,7 +49,17 @@ async def mark_attendance(
     if not verify_ble_signature(s=body.s, t=body.t, ts=body.ts, sig=body.sig):
         return MarkAttendanceResponse(success=False, error="invalid_signature")
 
-    # Step 5 — check duplicate
+    # Step 5 — check enrollment
+    enrollment = (await db.execute(
+        select(Enrollment).where(
+            Enrollment.student_id == uuid.UUID(student_id),
+            Enrollment.course_id == session.course_id,
+        )
+    )).scalar_one_or_none()
+    if not enrollment:
+        return MarkAttendanceResponse(success=False, error="not_enrolled")
+
+    # Step 6 — check duplicate
     dup = (await db.execute(
         select(Attendance).where(
             Attendance.session_id == session.id,
@@ -59,7 +69,7 @@ async def mark_attendance(
     if dup:
         return MarkAttendanceResponse(success=False, error="already_marked")
 
-    # Step 6 — insert attendance, mark token used
+    # Step 7 — insert attendance, mark token used
     record = Attendance(session_id=session.id, student_id=uuid.UUID(student_id), token_id=body.t)
     token.used = True
     db.add(record)

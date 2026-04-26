@@ -7,10 +7,10 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.models.course import Course
+from app.models.course import Course, Enrollment
 
 
-# --- fixtures & helpers ---
+# --- helpers ---
 
 PROFESSOR = {
     "email": "prof@test.com",
@@ -35,15 +35,16 @@ async def register_and_login(client: AsyncClient, user_data: dict) -> tuple[str,
 
 
 async def create_course(db: AsyncSession, professor_id: str) -> Course:
-    course = Course(
-        code="CSC401",
-        name="Mobile Development",
-        professor_id=uuid.UUID(professor_id),
-    )
+    course = Course(code="CSC401", name="Mobile Development", professor_id=uuid.UUID(professor_id))
     db.add(course)
     await db.commit()
     await db.refresh(course)
     return course
+
+
+async def enroll_student(db: AsyncSession, student_id: str, course_id: uuid.UUID):
+    db.add(Enrollment(student_id=uuid.UUID(student_id), course_id=course_id))
+    await db.commit()
 
 
 def ble_sig(session_id: str, t: str, ts: int) -> str:
@@ -76,7 +77,8 @@ async def setup_session_with_token(client: AsyncClient, db: AsyncSession) -> tup
         headers=auth_header(prof_token),
     )
 
-    student_token, _ = await register_and_login(client, STUDENT)
+    student_token, student_id = await register_and_login(client, STUDENT)
+    await enroll_student(db, student_id, course.id)
     return student_token, session_id, t, ts
 
 
@@ -130,7 +132,9 @@ async def test_inactive_session(client: AsyncClient, db: AsyncSession):
     )
     await client.post(f"/sessions/{session_id}/end", headers=auth_header(prof_token))
 
-    student_token, _ = await register_and_login(client, STUDENT)
+    student_token, student_id = await register_and_login(client, STUDENT)
+    await enroll_student(db, student_id, course.id)
+
     ts2 = int(time.time() * 1000)
     res = await client.post(
         "/attendance",
@@ -209,11 +213,6 @@ async def test_get_history_filtered_by_course_id(client: AsyncClient, db: AsyncS
         headers=auth_header(student_token),
     )
 
-    # get the course_id from the history record
-    history = await client.get("/attendance/me", headers=auth_header(student_token))
-    session_id_from_record = history.json()["records"][0]["session_id"]
-
-    # filter by a random course_id — should return 0 records
     res = await client.get(
         f"/attendance/me?course_id={uuid.uuid4()}",
         headers=auth_header(student_token),
@@ -221,7 +220,6 @@ async def test_get_history_filtered_by_course_id(client: AsyncClient, db: AsyncS
     assert res.status_code == 200
     assert len(res.json()["records"]) == 0
 
-    # filter without course_id — should return 1 record
     res = await client.get("/attendance/me", headers=auth_header(student_token))
     assert res.status_code == 200
     assert len(res.json()["records"]) == 1

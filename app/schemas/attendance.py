@@ -28,7 +28,7 @@ class AttendanceRecord(BaseModel):
 class MarkAttendanceResponse(BaseModel):
     success: bool
     markedAt: datetime | None = None
-    error: Literal["invalid_token", "already_marked", "session_ended", "stale_token", "invalid_signature"] | None = None
+    error: Literal["invalid_token", "already_marked", "session_ended", "stale_token", "invalid_signature", "not_enrolled"] | None = None
 
 
 class StudentAttendanceRecord(BaseModel):

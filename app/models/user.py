@@ -1,5 +1,5 @@
 import uuid
-from sqlalchemy import Column, String, Enum, DateTime, func
+from sqlalchemy import Column, String, Enum, DateTime, Integer, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 
@@ -16,6 +16,8 @@ class User(Base):
     role = Column(Enum("student", "professor", name="user_role"), nullable=False)
     full_name = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    failed_login_attempts = Column(Integer, nullable=False, server_default="0", default=0)
+    locked_until = Column(DateTime(timezone=True), nullable=True)
 
     # TODO: add face_embedding column (LargeBinary or Vector) when ML is ready
     # face_embedding = Column(LargeBinary, nullable=True)

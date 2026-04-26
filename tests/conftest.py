@@ -9,9 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import NullPool
 
 import app.models.attendance  # noqa — register with Base
-import app.models.course  # noqa
-import app.models.session  # noqa
-import app.models.user  # noqa
+import app.models.blocklist   # noqa
+import app.models.course      # noqa
+import app.models.session     # noqa
+import app.models.user        # noqa
 from app.config import settings
 from app.database import Base, get_db
 from app.main import app
@@ -25,16 +26,15 @@ TestSession = async_sessionmaker(engine_test, expire_on_commit=False, class_=Asy
 
 @pytest_asyncio.fixture(autouse=True)
 async def setup_db():
-    # Raw SQL drop avoids reflection queries that conflict with asyncpg inside run_sync
     async with engine_test.begin() as conn:
         await conn.execute(text(
-            "DROP TABLE IF EXISTS attendance, session_tokens, sessions, enrollments, courses, users CASCADE"
+            "DROP TABLE IF EXISTS attendance, session_tokens, sessions, enrollments, "
+            "courses, token_blocklist, users CASCADE"
         ))
         await conn.execute(text(
             "DROP TYPE IF EXISTS user_role, session_status CASCADE"
         ))
 
-    # checkfirst=False: tables were just dropped, no need to reflect
     async with engine_test.begin() as conn:
         await conn.run_sync(lambda c: Base.metadata.create_all(c, checkfirst=False))
 
@@ -42,7 +42,8 @@ async def setup_db():
 
     async with engine_test.begin() as conn:
         await conn.execute(text(
-            "DROP TABLE IF EXISTS attendance, session_tokens, sessions, enrollments, courses, users CASCADE"
+            "DROP TABLE IF EXISTS attendance, session_tokens, sessions, enrollments, "
+            "courses, token_blocklist, users CASCADE"
         ))
         await conn.execute(text(
             "DROP TYPE IF EXISTS user_role, session_status CASCADE"

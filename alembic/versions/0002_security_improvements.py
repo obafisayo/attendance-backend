@@ -1,0 +1,32 @@
+"""security improvements: token blocklist and account lockout
+
+Revision ID: 0002
+Revises: 0001
+Create Date: 2026-04-26
+"""
+
+from alembic import op
+import sqlalchemy as sa
+
+revision = "0002"
+down_revision = "0001"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.add_column("users", sa.Column("failed_login_attempts", sa.Integer(), nullable=False, server_default="0"))
+    op.add_column("users", sa.Column("locked_until", sa.DateTime(timezone=True), nullable=True))
+
+    op.create_table(
+        "token_blocklist",
+        sa.Column("jti", sa.String(255), primary_key=True),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("blocked_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    )
+
+
+def downgrade() -> None:
+    op.drop_table("token_blocklist")
+    op.drop_column("users", "locked_until")
+    op.drop_column("users", "failed_login_attempts")

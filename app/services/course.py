@@ -1,13 +1,20 @@
 import uuid
+from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.orm import aliased
 
 from app.models.course import Course, Enrollment
 from app.models.session import Session
 from app.models.attendance import Attendance
 from app.models.user import User
-from app.schemas.course import CourseOut
+from app.schemas.course import (
+    CourseOut,
+    CreateCourseRequest,
+    UpdateCourseRequest,
+    StudentStatsRecord,
+    BulkEnrollResponse,
+)
 
 
 async def get_courses_for_professor(db: AsyncSession, professor_id: str) -> list[CourseOut]:
@@ -31,6 +38,168 @@ async def get_courses_for_student(db: AsyncSession, student_id: str) -> list[Cou
         .group_by(Course.id)
     )).all()
     return [CourseOut(id=c.id, code=c.code, name=c.name, studentCount=cnt) for c, cnt in rows]
+
+
+async def create_course(db: AsyncSession, professor_id: str, body: CreateCourseRequest) -> Course:
+    course = Course(
+        code=body.code.strip().upper(),
+        name=body.name.strip(),
+        professor_id=uuid.UUID(professor_id),
+    )
+    db.add(course)
+    await db.commit()
+    await db.refresh(course)
+    return course
+
+
+async def get_course_by_id(db: AsyncSession, course_id: str) -> Course | None:
+    return await db.get(Course, uuid.UUID(course_id))
+
+
+async def update_course(db: AsyncSession, course: Course, body: UpdateCourseRequest) -> Course:
+    if body.code is not None:
+        course.code = body.code.strip().upper()
+    if body.name is not None:
+        course.name = body.name.strip()
+    await db.commit()
+    await db.refresh(course)
+    return course
+
+
+async def delete_course(db: AsyncSession, course: Course) -> None:
+    session_count = (await db.execute(
+        select(func.count()).where(Session.course_id == course.id)
+    )).scalar_one()
+    if session_count > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot delete a course that has sessions. End all sessions first.",
+        )
+    await db.delete(course)
+    await db.commit()
+
+
+async def enroll_student_by_identifier(db: AsyncSession, course_id: str, identifier: str) -> User:
+    user = (await db.execute(
+        select(User).where(
+            User.role == "student",
+            or_(User.email == identifier, User.matric_no == identifier),
+        )
+    )).scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student not found")
+
+    course_uuid = uuid.UUID(course_id)
+    existing = (await db.execute(
+        select(Enrollment).where(
+            Enrollment.student_id == user.id,
+            Enrollment.course_id == course_uuid,
+        )
+    )).scalar_one_or_none()
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Student already enrolled")
+
+    db.add(Enrollment(student_id=user.id, course_id=course_uuid))
+    await db.commit()
+    return user
+
+
+async def bulk_enroll_students(
+    db: AsyncSession, course_id: str, identifiers: list[str]
+) -> BulkEnrollResponse:
+    course_uuid = uuid.UUID(course_id)
+    enrolled = 0
+    already_enrolled = 0
+    not_found: list[str] = []
+
+    for identifier in identifiers:
+        user = (await db.execute(
+            select(User).where(
+                User.role == "student",
+                or_(User.email == identifier, User.matric_no == identifier),
+            )
+        )).scalar_one_or_none()
+        if not user:
+            not_found.append(identifier)
+            continue
+
+        existing = (await db.execute(
+            select(Enrollment).where(
+                Enrollment.student_id == user.id,
+                Enrollment.course_id == course_uuid,
+            )
+        )).scalar_one_or_none()
+        if existing:
+            already_enrolled += 1
+            continue
+
+        db.add(Enrollment(student_id=user.id, course_id=course_uuid))
+        enrolled += 1
+
+    if enrolled > 0:
+        await db.commit()
+
+    return BulkEnrollResponse(enrolled=enrolled, already_enrolled=already_enrolled, not_found=not_found)
+
+
+async def remove_student(db: AsyncSession, course_id: str, student_id: str) -> None:
+    enrollment = (await db.execute(
+        select(Enrollment).where(
+            Enrollment.course_id == uuid.UUID(course_id),
+            Enrollment.student_id == uuid.UUID(student_id),
+        )
+    )).scalar_one_or_none()
+    if not enrollment:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Enrollment not found")
+    await db.delete(enrollment)
+    await db.commit()
+
+
+async def get_course_stats(
+    db: AsyncSession, course_id: str
+) -> tuple[int, list[StudentStatsRecord]]:
+    course_uuid = uuid.UUID(course_id)
+
+    total_sessions: int = (await db.execute(
+        select(func.count()).where(
+            Session.course_id == course_uuid,
+            Session.status == "ended",
+        )
+    )).scalar_one() or 0
+
+    ended_session_ids = (
+        select(Session.id)
+        .where(Session.course_id == course_uuid, Session.status == "ended")
+        .scalar_subquery()
+    )
+
+    AttendanceAlias = aliased(Attendance)
+
+    rows = (await db.execute(
+        select(User, func.count(AttendanceAlias.id).label("attended"))
+        .join(Enrollment, Enrollment.student_id == User.id)
+        .outerjoin(
+            AttendanceAlias,
+            (AttendanceAlias.student_id == User.id) &
+            (AttendanceAlias.session_id.in_(ended_session_ids)),
+        )
+        .where(Enrollment.course_id == course_uuid)
+        .group_by(User.id)
+        .order_by(User.full_name)
+    )).all()
+
+    records: list[StudentStatsRecord] = [
+        StudentStatsRecord(
+            student_id=user.id,
+            student_name=user.full_name,
+            matric_no=user.matric_no,
+            sessions_attended=attended,
+            total_sessions=total_sessions,
+            percentage=round(attended / total_sessions * 100, 1) if total_sessions > 0 else 0.0,
+        )
+        for user, attended in rows
+    ]
+    return total_sessions, records
 
 
 async def export_course_attendance(
