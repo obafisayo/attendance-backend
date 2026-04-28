@@ -34,11 +34,7 @@ async def register_and_login(client: AsyncClient, user_data: dict) -> tuple[str,
 
 
 async def create_course(db: AsyncSession, professor_id: str) -> Course:
-    course = Course(
-        code="CSC401",
-        name="Mobile Development",
-        professor_id=uuid.UUID(professor_id),
-    )
+    course = Course(code="CSC401", name="Mobile Development", professor_id=uuid.UUID(professor_id))
     db.add(course)
     await db.commit()
     await db.refresh(course)

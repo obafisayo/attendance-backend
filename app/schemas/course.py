@@ -1,5 +1,15 @@
-from pydantic import BaseModel
 import uuid
+from pydantic import BaseModel
+
+
+class CreateCourseRequest(BaseModel):
+    code: str
+    name: str
+
+
+class UpdateCourseRequest(BaseModel):
+    code: str | None = None
+    name: str | None = None
 
 
 class CreateCourseRequest(BaseModel):

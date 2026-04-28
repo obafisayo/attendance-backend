@@ -45,6 +45,16 @@ async def test_student_missing_matric_no_returns_422(client: AsyncClient):
     assert res.status_code == 422
 
 
+async def test_password_too_short_returns_422(client: AsyncClient):
+    res = await client.post("/auth/register", json={**PROFESSOR, "password": "short1"})
+    assert res.status_code == 422
+
+
+async def test_password_no_digit_returns_422(client: AsyncClient):
+    res = await client.post("/auth/register", json={**PROFESSOR, "password": "passwordonly"})
+    assert res.status_code == 422
+
+
 async def test_login_success(client: AsyncClient):
     await client.post("/auth/register", json=STUDENT)
     res = await client.post("/auth/login", json={
@@ -62,7 +72,7 @@ async def test_login_wrong_password(client: AsyncClient):
     await client.post("/auth/register", json=STUDENT)
     res = await client.post("/auth/login", json={
         "email": STUDENT["email"],
-        "password": "wrongpassword",
+        "password": "wrongpassword1",
         "role": "student",
     })
     assert res.status_code == 401
@@ -78,6 +88,18 @@ async def test_login_wrong_role(client: AsyncClient):
     assert res.status_code == 401
 
 
+async def test_account_lockout(client: AsyncClient):
+    await client.post("/auth/register", json=STUDENT)
+    for _ in range(5):
+        await client.post("/auth/login", json={
+            "email": STUDENT["email"], "password": "wrongpass1", "role": "student"
+        })
+    res = await client.post("/auth/login", json={
+        "email": STUDENT["email"], "password": "wrongpass1", "role": "student"
+    })
+    assert res.status_code == 429
+
+
 async def test_refresh_valid_token(client: AsyncClient):
     reg = await client.post("/auth/register", json=STUDENT)
     refresh_token = reg.json()["refreshToken"]
@@ -88,6 +110,53 @@ async def test_refresh_valid_token(client: AsyncClient):
     assert data["refreshToken"]
 
 
+async def test_refresh_rotates_old_token(client: AsyncClient):
+    reg = await client.post("/auth/register", json=STUDENT)
+    old_refresh = reg.json()["refreshToken"]
+    await client.post("/auth/refresh", json={"refreshToken": old_refresh})
+    # old refresh token should now be blocked
+    res = await client.post("/auth/refresh", json={"refreshToken": old_refresh})
+    assert res.status_code == 401
+
+
 async def test_refresh_invalid_token(client: AsyncClient):
     res = await client.post("/auth/refresh", json={"refreshToken": "not.a.valid.token"})
+    assert res.status_code == 401
+
+
+async def test_logout_blocks_token(client: AsyncClient):
+    reg = await client.post("/auth/register", json=STUDENT)
+    token = reg.json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    await client.post("/auth/logout", headers=headers)
+
+    res = await client.get("/users/me", headers=headers)
+    assert res.status_code == 401
+
+
+async def test_change_password(client: AsyncClient):
+    reg = await client.post("/auth/register", json=STUDENT)
+    token = reg.json()["token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    res = await client.post("/auth/change-password", json={
+        "old_password": STUDENT["password"],
+        "new_password": "newpassword99",
+    }, headers=headers)
+    assert res.status_code == 204
+
+    login_res = await client.post("/auth/login", json={
+        "email": STUDENT["email"], "password": "newpassword99", "role": "student"
+    })
+    assert login_res.status_code == 200
+
+
+async def test_change_password_wrong_old(client: AsyncClient):
+    reg = await client.post("/auth/register", json=STUDENT)
+    token = reg.json()["token"]
+    res = await client.post("/auth/change-password", json={
+        "old_password": "wrongpass1",
+        "new_password": "newpassword99",
+    }, headers={"Authorization": f"Bearer {token}"})
     assert res.status_code == 401

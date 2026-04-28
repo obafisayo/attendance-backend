@@ -1,6 +1,17 @@
 from pydantic import BaseModel, EmailStr, field_validator
 from typing import Literal
 import uuid
+from typing import Literal
+
+from pydantic import BaseModel, EmailStr, field_validator
+
+
+def _require_strong_password(v: str) -> str:
+    if len(v) < 8:
+        raise ValueError("Password must be at least 8 characters")
+    if not any(c.isdigit() for c in v):
+        raise ValueError("Password must contain at least one digit")
+    return v
 
 
 def _validate_password(v: str) -> str:

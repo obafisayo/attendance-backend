@@ -6,6 +6,8 @@ from slowapi.util import get_remote_address
 
 limiter = Limiter(key_func=get_remote_address)
 from jose import JWTError
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_user_id
@@ -24,6 +26,7 @@ from app.schemas.auth import (
 from app.services.auth import authenticate_user, build_token_pair, change_password, create_user
 
 router = APIRouter()
+limiter = Limiter(key_func=get_remote_address)
 
 
 @router.post("/register", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
@@ -58,6 +61,10 @@ async def refresh(body: RefreshRequest, db: AsyncSession = Depends(get_db)):
 
     if payload.get("type") != "refresh":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type")
+
+    jti = payload.get("jti")
+    if jti and await is_token_blocked(db, jti):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token has been revoked")
 
     user = await db.get(User, uuid.UUID(payload["sub"]))
     if not user:

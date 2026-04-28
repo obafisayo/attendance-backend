@@ -136,8 +136,6 @@ tests/
 
 ## Shared files — do not modify without team coordination
 
-These files are shared infrastructure. Editing them risks breaking everyone:
-
 | File | Rule |
 |---|---|
 | `app/models/*.py` | Any change needs a new Alembic migration. Discuss first. |
@@ -224,4 +222,4 @@ netsh advfirewall firewall add rule name="Expo Metro" dir=in action=allow protoc
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Default 15 |
 | `REFRESH_TOKEN_EXPIRE_DAYS` | Default 7 |
 | `ALGORITHM` | HS256 |
-| `ENVIRONMENT` | `development` or `production` |
+| `ENVIRONMENT` | `development` (CORS open) or `production` (CORS locked to `_PROD_ORIGINS` in main.py) |
