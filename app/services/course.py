@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, case
@@ -181,9 +182,9 @@ async def export_course_attendance(
         .where(Session.course_id == uuid.UUID(course_id))
     )
     if from_date:
-        q = q.where(Session.started_at >= from_date)
+        q = q.where(Session.started_at >= datetime.fromisoformat(from_date))
     if to_date:
-        q = q.where(Session.started_at <= to_date)
+        q = q.where(Session.started_at <= datetime.fromisoformat(to_date))
 
     rows = (await db.execute(q)).all()
     return [

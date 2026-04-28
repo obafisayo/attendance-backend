@@ -152,15 +152,35 @@ async def test_export_csv(client: AsyncClient, db: AsyncSession):
         f"/courses/{course_id}/attendance/export?format=csv",
         headers=auth_header(prof_token),
     )
+
+    # --- basic response checks ---
     assert res.status_code == 200
     assert "text/csv" in res.headers["content-type"]
     assert 'filename="attendance_' in res.headers["content-disposition"]
 
+    # --- parse CSV ---
     lines = res.text.strip().splitlines()
-    assert lines[0] == "Student Name,Matric No,Session Date,Marked At"
-    assert len(lines) == 2  # header + 1 record
-    assert "Test Student" in lines[1]
-    assert "MAT001" in lines[1]
+
+    # --- metadata checks ---
+    assert lines[0].startswith("Course:")
+    assert "CSC401" in lines[0]
+
+    assert lines[1].startswith("Exported:")
+    assert lines[2].startswith("Date Range:")
+    assert lines[3].startswith("Total Records:")
+    assert "1" in lines[3]
+
+    # empty spacer line
+    assert lines[4] == ""
+
+    # --- header check ---
+    assert lines[5] == "Student Name,Matric No,Session Date,Marked At"
+
+    # --- data row check ---
+    assert len(lines) == 7  # 4 metadata + 1 blank + header + 1 record
+    data_line = lines[-1]  # always grab last row
+    assert "Test Student" in data_line
+    assert "MAT001" in data_line
 
 
 async def test_export_xlsx(client: AsyncClient, db: AsyncSession):

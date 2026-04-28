@@ -1,6 +1,7 @@
 import csv
 import io
 import uuid
+from datetime import datetime
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -180,9 +181,17 @@ async def export_attendance(
     records = await course_service.export_course_attendance(db, course_id, from_date, to_date)
     filename = f"attendance_{course.code}"
 
+    exported_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+    date_range = f"{from_date or 'all'} to {to_date or 'all'}"
+
     if format == "csv":
         output = io.StringIO()
         writer = csv.writer(output)
+        writer.writerow([f"Course: {course.code} — {course.name}"])
+        writer.writerow([f"Exported: {exported_at}"])
+        writer.writerow([f"Date Range: {date_range}"])
+        writer.writerow([f"Total Records: {len(records)}"])
+        writer.writerow([])
         writer.writerow(["Student Name", "Matric No", "Session Date", "Marked At"])
         for r in records:
             writer.writerow([
@@ -199,9 +208,23 @@ async def export_attendance(
         )
 
     from openpyxl import Workbook
+    from openpyxl.styles import Font
     wb = Workbook()
     ws = wb.active
+    ws.title = "Attendance"
+    meta_rows = [
+        [f"Course: {course.code} — {course.name}"],
+        [f"Exported: {exported_at}"],
+        [f"Date Range: {date_range}"],
+        [f"Total Records: {len(records)}"],
+        [],
+    ]
+    for row in meta_rows:
+        ws.append(row)
+    header_row = ws.max_row + 1
     ws.append(["Student Name", "Matric No", "Session Date", "Marked At"])
+    for cell in ws[header_row]:
+        cell.font = Font(bold=True)
     for r in records:
         ws.append([
             r["student_name"],

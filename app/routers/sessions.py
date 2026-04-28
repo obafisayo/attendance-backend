@@ -1,6 +1,8 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +15,7 @@ from app.schemas.session import CreateSessionRequest, SessionOut, SessionTokenOu
 from app.services import attendance as attendance_service
 from app.services import session as session_service
 
+limiter = Limiter(key_func=get_remote_address)
 router = APIRouter()
 
 
@@ -53,7 +56,9 @@ async def list_sessions(
 
 
 @router.post("", response_model=SessionOut, status_code=201)
+@limiter.limit("20/hour")
 async def create_session(
+    request: Request,
     body: CreateSessionRequest,
     professor_id: str = Depends(require_professor),
     db: AsyncSession = Depends(get_db),

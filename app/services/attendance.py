@@ -71,19 +71,26 @@ async def get_student_history(
     course_id: str | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> tuple[list[StudentAttendanceRecord], int | None]:
     q = (
         select(Attendance, Session, Course)
         .join(Session, Attendance.session_id == Session.id)
         .join(Course, Session.course_id == Course.id)
         .where(Attendance.student_id == uuid.UUID(student_id))
+        .order_by(Attendance.marked_at.desc())
     )
     if course_id:
         q = q.where(Course.id == uuid.UUID(course_id))
     if from_date:
-        q = q.where(Attendance.marked_at >= from_date)
+        q = q.where(Attendance.marked_at >= datetime.fromisoformat(from_date))
     if to_date:
-        q = q.where(Attendance.marked_at <= to_date)
+        q = q.where(Attendance.marked_at <= datetime.fromisoformat(to_date))
+    if offset:
+        q = q.offset(offset)
+    if limit is not None:
+        q = q.limit(limit)
 
     rows = (await db.execute(q)).all()
     records = [
