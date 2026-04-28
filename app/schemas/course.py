@@ -12,6 +12,16 @@ class UpdateCourseRequest(BaseModel):
     name: str | None = None
 
 
+class CreateCourseRequest(BaseModel):
+    code: str
+    name: str
+
+
+class UpdateCourseRequest(BaseModel):
+    code: str | None = None
+    name: str | None = None
+
+
 class CourseOut(BaseModel):
     id: uuid.UUID
     code: str
@@ -38,9 +48,3 @@ class CourseStatsResponse(BaseModel):
     course_id: uuid.UUID
     total_sessions: int
     students: list[StudentStatsRecord]
-
-
-class BulkEnrollResponse(BaseModel):
-    enrolled: int
-    already_enrolled: int
-    not_found: list[str]

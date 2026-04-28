@@ -1,5 +1,4 @@
-import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,24 +43,28 @@ async def authenticate_user(db: AsyncSession, body: LoginRequest) -> User:
         await db.execute(select(User).where(User.email == body.email, User.role == body.role))
     ).scalar_one_or_none()
 
+    # Same generic error regardless of whether user exists (prevents enumeration)
     _invalid = HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
     if not user:
         raise _invalid
 
+    # Check lockout
     if user.locked_until and user.locked_until > datetime.now(timezone.utc):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail=f"Account locked until {user.locked_until.strftime('%H:%M UTC')}. Try again later.",
+            detail=f"Account locked. Try again after {user.locked_until.strftime('%H:%M UTC')}",
         )
 
     if not verify_password(body.password, user.password_hash):
         user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
         if user.failed_login_attempts >= _MAX_ATTEMPTS:
+            from datetime import timedelta
             user.locked_until = datetime.now(timezone.utc) + timedelta(minutes=_LOCKOUT_MINUTES)
         await db.commit()
         raise _invalid
 
+    # Successful login — reset counters
     user.failed_login_attempts = 0
     user.locked_until = None
     await db.commit()
@@ -70,6 +73,7 @@ async def authenticate_user(db: AsyncSession, body: LoginRequest) -> User:
 
 
 async def change_password(db: AsyncSession, user_id: str, old_password: str, new_password: str) -> None:
+    import uuid
     user = await db.get(User, uuid.UUID(user_id))
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")

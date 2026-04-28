@@ -1,19 +1,18 @@
 services:
   db:
-    image: postgres:16-alpine
+    image: mysql:8.4
     environment:
-      POSTGRES_USER: attendance
-      POSTGRES_PASSWORD: attendance
-      POSTGRES_DB: attendance_db
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: attendance_db
     ports:
-      - "5433:5432"
+      - "3306:3306"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U attendance -d attendance_db"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-ppassword"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
 
   api:
     build: .
@@ -29,4 +28,4 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 volumes:
-  postgres_data:
+  mysql_data:

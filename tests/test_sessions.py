@@ -139,21 +139,15 @@ async def test_register_token(client: AsyncClient, db: AsyncSession):
     assert "expiresAt" in data
 
 
-async def test_register_invalid_signature(client: AsyncClient, db: AsyncSession):
-    token, prof_id = await register_and_login(client, PROFESSOR)
-    course = await create_course(db, prof_id)
-
-    sess_res = await client.post(
-        "/sessions", json={"courseId": str(course.id)}, headers=auth_header(token)
-    )
-    session_id = sess_res.json()["id"]
+async def test_register_token_on_nonexistent_session(client: AsyncClient, db: AsyncSession):
+    token, _ = await register_and_login(client, PROFESSOR)
 
     res = await client.post(
-        f"/sessions/{session_id}/token",
-        json={"t": "tok_abc123", "ts": int(time.time() * 1000), "sig": "badsignatur"},
+        f"/sessions/{uuid.uuid4()}/token",
+        json={"t": "tok_abc"},
         headers=auth_header(token),
     )
-    assert res.status_code == 400
+    assert res.status_code == 404
 
 
 async def test_register_token_on_ended_session(client: AsyncClient, db: AsyncSession):

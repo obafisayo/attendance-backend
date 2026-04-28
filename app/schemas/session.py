@@ -9,10 +9,7 @@ class CreateSessionRequest(BaseModel):
 
 
 class SessionTokenRequest(BaseModel):
-    # exact BLE payload fields the professor app broadcasts
-    t: str   # token ID (random string, changes every 20s)
-    ts: int  # timestamp in milliseconds
-    sig: str # truncated SHA256 signature (first 10 chars)
+    t: str  # 6-char token ID broadcast over BLE
 
 
 class SessionOut(BaseModel):

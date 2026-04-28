@@ -1,10 +1,12 @@
 import csv
 import io
 import uuid
+from datetime import datetime
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, status
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
@@ -12,22 +14,23 @@ from pydantic import BaseModel
 from app.core.dependencies import get_current_user_id, require_professor
 from app.database import get_db
 from app.models.course import Course, Enrollment
+from app.models.session import Session
 from app.models.user import User
 from app.schemas.course import (
-    BulkEnrollResponse,
     CourseListResponse,
     CourseOut,
     CourseStatsResponse,
     CreateCourseRequest,
     UpdateCourseRequest,
 )
+from app.schemas.session import SessionOut
 from app.services import course as course_service
 
 router = APIRouter()
 
 
 class EnrollRequest(BaseModel):
-    identifier: str  # student email or matric number
+    identifier: str  # email or matric number
 
 
 async def _get_owned_course(course_id: str, professor_id: str, db: AsyncSession) -> Course:
@@ -37,12 +40,6 @@ async def _get_owned_course(course_id: str, professor_id: str, db: AsyncSession)
     if str(course.professor_id) != professor_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your course")
     return course
-
-
-async def _student_count(db: AsyncSession, course: Course) -> int:
-    return (await db.execute(
-        select(func.count(Enrollment.student_id)).where(Enrollment.course_id == course.id)
-    )).scalar_one() or 0
 
 
 @router.get("", response_model=CourseListResponse)
@@ -79,7 +76,9 @@ async def get_course(
     db: AsyncSession = Depends(get_db),
 ):
     course = await _get_owned_course(course_id, professor_id, db)
-    cnt = await _student_count(db, course)
+    cnt = (await db.execute(
+        select(func.count(Enrollment.student_id)).where(Enrollment.course_id == course.id)
+    )).scalar_one() or 0
     return CourseOut(id=course.id, code=course.code, name=course.name, studentCount=cnt)
 
 
@@ -92,7 +91,9 @@ async def update_course(
 ):
     course = await _get_owned_course(course_id, professor_id, db)
     course = await course_service.update_course(db, course, body)
-    cnt = await _student_count(db, course)
+    cnt = (await db.execute(
+        select(func.count(Enrollment.student_id)).where(Enrollment.course_id == course.id)
+    )).scalar_one() or 0
     return CourseOut(id=course.id, code=course.code, name=course.name, studentCount=cnt)
 
 
@@ -106,6 +107,30 @@ async def delete_course(
     await course_service.delete_course(db, course)
 
 
+@router.get("/{course_id}/sessions", response_model=list[SessionOut])
+async def list_course_sessions(
+    course_id: str,
+    professor_id: str = Depends(require_professor),
+    db: AsyncSession = Depends(get_db),
+):
+    course = await _get_owned_course(course_id, professor_id, db)
+    rows = (await db.execute(
+        select(Session)
+        .where(Session.course_id == course.id)
+        .order_by(Session.started_at.desc())
+    )).scalars().all()
+    return [
+        SessionOut(
+            id=s.id,
+            courseId=s.course_id,
+            status=s.status,
+            startedAt=s.started_at,
+            endedAt=s.ended_at,
+        )
+        for s in rows
+    ]
+
+
 @router.post("/{course_id}/enroll", status_code=status.HTTP_201_CREATED)
 async def enroll_student(
     course_id: str,
@@ -114,32 +139,8 @@ async def enroll_student(
     db: AsyncSession = Depends(get_db),
 ):
     await _get_owned_course(course_id, professor_id, db)
-    student = await course_service.enroll_student_by_identifier(db, course_id, body.identifier)
+    student = await course_service.enroll_student(db, course_id, body.identifier)
     return {"student_id": str(student.id), "student_name": student.full_name, "email": student.email}
-
-
-@router.post("/{course_id}/enroll/bulk", response_model=BulkEnrollResponse)
-async def bulk_enroll(
-    course_id: str,
-    file: UploadFile = File(...),
-    professor_id: str = Depends(require_professor),
-    db: AsyncSession = Depends(get_db),
-):
-    await _get_owned_course(course_id, professor_id, db)
-    content = await file.read()
-    try:
-        text = content.decode("utf-8")
-    except UnicodeDecodeError:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File must be UTF-8 encoded")
-
-    reader = csv.reader(io.StringIO(text))
-    next(reader, None)  # skip header row
-    identifiers = [row[0].strip() for row in reader if row and row[0].strip()]
-
-    if not identifiers:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No identifiers found in file")
-
-    return await course_service.bulk_enroll_students(db, course_id, identifiers)
 
 
 @router.delete("/{course_id}/students/{student_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -161,7 +162,11 @@ async def get_course_stats(
 ):
     course = await _get_owned_course(course_id, professor_id, db)
     total_sessions, students = await course_service.get_course_stats(db, str(course.id))
-    return CourseStatsResponse(course_id=course.id, total_sessions=total_sessions, students=students)
+    return CourseStatsResponse(
+        course_id=course.id,
+        total_sessions=total_sessions,
+        students=students,
+    )
 
 
 @router.get("/{course_id}/attendance/export")
@@ -177,9 +182,17 @@ async def export_attendance(
     records = await course_service.export_course_attendance(db, course_id, from_date, to_date)
     filename = f"attendance_{course.code}"
 
+    exported_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+    date_range = f"{from_date or 'all'} to {to_date or 'all'}"
+
     if format == "csv":
         output = io.StringIO()
         writer = csv.writer(output)
+        writer.writerow([f"Course: {course.code} — {course.name}"])
+        writer.writerow([f"Exported: {exported_at}"])
+        writer.writerow([f"Date Range: {date_range}"])
+        writer.writerow([f"Total Records: {len(records)}"])
+        writer.writerow([])
         writer.writerow(["Student Name", "Matric No", "Session Date", "Marked At"])
         for r in records:
             writer.writerow([
@@ -196,9 +209,23 @@ async def export_attendance(
         )
 
     from openpyxl import Workbook
+    from openpyxl.styles import Font
     wb = Workbook()
     ws = wb.active
+    ws.title = "Attendance"
+    meta_rows = [
+        [f"Course: {course.code} — {course.name}"],
+        [f"Exported: {exported_at}"],
+        [f"Date Range: {date_range}"],
+        [f"Total Records: {len(records)}"],
+        [],
+    ]
+    for row in meta_rows:
+        ws.append(row)
+    header_row = ws.max_row + 1
     ws.append(["Student Name", "Matric No", "Session Date", "Marked At"])
+    for cell in ws[header_row]:
+        cell.font = Font(bold=True)
     for r in records:
         ws.append([
             r["student_name"],

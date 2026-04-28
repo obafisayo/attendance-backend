@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.config import settings
 
@@ -49,20 +50,21 @@ async def is_token_blocked(db: AsyncSession, jti: str) -> bool:
 
 
 async def block_token(db: AsyncSession, token: str) -> None:
+    """Add a JWT to the blocklist so it cannot be used again."""
     from app.models.blocklist import TokenBlocklist
     try:
         payload = decode_token(token)
     except JWTError:
         return
     jti = payload.get("jti")
+    if not jti:
+        return
     exp = payload.get("exp")
-    if not jti or not exp:
+    if not exp:
         return
     expires_at = datetime.fromtimestamp(exp, tz=timezone.utc)
-    existing = await db.get(TokenBlocklist, jti)
-    if not existing:
-        db.add(TokenBlocklist(jti=jti, expires_at=expires_at))
-        await db.commit()
+    db.add(TokenBlocklist(jti=jti, expires_at=expires_at))
+    await db.commit()
 
 
 def verify_ble_signature(s: str, t: str, ts: int, sig: str) -> bool:

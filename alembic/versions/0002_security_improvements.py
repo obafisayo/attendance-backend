@@ -1,8 +1,8 @@
-"""security improvements: token blocklist and account lockout
+"""security improvements: token blocklist, account lockout fields
 
 Revision ID: 0002
 Revises: 0001
-Create Date: 2026-04-26
+Create Date: 2026-04-25
 """
 
 from alembic import op
@@ -22,7 +22,12 @@ def upgrade() -> None:
         "token_blocklist",
         sa.Column("jti", sa.String(255), primary_key=True),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("blocked_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "blocked_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
     )
 
 
